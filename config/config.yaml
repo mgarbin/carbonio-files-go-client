@@ -1,0 +1,4 @@
+Main:
+  server: "mail.example.com"
+  username: "myuser"
+  password: "mypassword"
