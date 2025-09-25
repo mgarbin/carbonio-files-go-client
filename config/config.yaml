@@ -2,3 +2,4 @@ Main:
   server: "mail.example.com"
   username: "myuser"
   password: "mypassword"
+//  AuthToken: "ZM_AUTH_TOKEN"

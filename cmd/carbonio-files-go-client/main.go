@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -15,9 +16,10 @@ type Config struct {
 }
 
 type MainConfig struct {
-	Endpoint string `yaml:"endpoint"`
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
+	Endpoint  string  `yaml:"endpoint"`
+	Username  string  `yaml:"username"`
+	Password  string  `yaml:"password"`
+	AuthToken *string `yaml:"authToken"`
 }
 
 func LoadConfig(filename string) (*Config, error) {
@@ -40,6 +42,35 @@ func printAllFlags() {
 	})
 }
 
+func recursiveNode(graphqlAuthenticator *graphql.GraphQLAuthenticator, id string, level int) {
+	nodes, nodesErr := graphqlAuthenticator.GetAllNode(id, "NAME_ASC", nil, nil)
+	if nodesErr != nil {
+		panic(nodesErr)
+	}
+
+	var z string
+
+	z = ""
+
+	if level > 0 {
+		z = strings.Repeat(" ", level)
+	}
+
+	for _, child := range nodes {
+		fmt.Printf("%s|", z)
+		if child.Type == "FOLDER" {
+			fmt.Printf("%s (%s) \n", child.Name, child.Type)
+			recursiveNode(graphqlAuthenticator, child.ID, level+1)
+		} else {
+			if child.Extension != nil {
+				fmt.Printf("%s.%s (%s) \n", child.Name, *child.Extension, child.Type)
+			} else {
+				fmt.Printf("%s (%s) \n", child.Name, child.Type)
+			}
+		}
+	}
+}
+
 func main() {
 
 	cfg, err := LoadConfig("config.yaml")
@@ -47,11 +78,23 @@ func main() {
 		panic(err)
 	}
 
-	carbonio := &carbonio.HTTPAuthenticator{Endpoint: cfg.Main.Endpoint}
-	zmAuthToken, err := carbonio.CarbonioZxAuth(cfg.Main.Username, cfg.Main.Password)
+	var zmAuthToken *string
+	zmAuthToken = cfg.Main.AuthToken
 
-	if err != nil {
-		panic(err)
+	if zmAuthToken == nil {
+
+		carbonio := &carbonio.HTTPAuthenticator{Endpoint: cfg.Main.Endpoint}
+		carbonioToken, errCarbonioToken := carbonio.CarbonioZxAuth(cfg.Main.Username, cfg.Main.Password)
+
+		if errCarbonioToken != nil {
+			panic(errCarbonioToken)
+		}
+
+		if carbonioToken != nil {
+			zmAuthToken = carbonioToken
+		} else {
+			panic("Invalid ZM_AUTH_TOKEN")
+		}
 	}
 
 	listAllNode := flag.Bool("getAllNode", false, "Use this flag to obtain all files node")
@@ -65,12 +108,32 @@ func main() {
 	}
 
 	if *listAllNode {
-		fmt.Println("ZM_AUTH_TOKEN obatined :", zmAuthToken)
-		fmt.Println("---------")
+		//fmt.Println("ZM_AUTH_TOKEN obatined :", zmAuthToken)
+		//fmt.Println("---------")
 		fmt.Println("Here all nodes found with graphl query!")
-		graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: cfg.Main.Endpoint, AuthToken: zmAuthToken}
+		graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: cfg.Main.Endpoint, AuthToken: *zmAuthToken}
 		base_folder := "LOCAL_ROOT"
-		graphqlAuthenticator.GetAllNode(base_folder)
+		recursiveNode(graphqlAuthenticator, base_folder, 0)
+		/*nodes, nodesErr := graphqlAuthenticator.GetAllNode(base_folder, "NAME_ASC", nil, nil)
+		if nodesErr != nil {
+			panic(nodesErr)
+		}
+		recursiveNode(graphqlAuthenticator, base_folder, 1)
+
+		for _, child := range nodes {
+			if child.Type == "FOLDER" {
+				fmt.Printf("%s (%s) \n", child.Name, child.Type)
+				recursiveNode(graphqlAuthenticator, child.ID, 1)
+			} else {
+				if child.Extension != nil {
+					fmt.Printf("%s.%s (%s) \n", child.Name, *child.Extension, child.Type)
+				} else {
+					fmt.Printf("%s (%s) \n", child.Name, child.Type)
+				}
+			}
+		}*/
 	}
+
+	//obatin hash file openssl sha384 -binary /tmp/Rec_2025-09-09_1512_Hyperion_meeting_Agosto_2025_upgrade_25.6.webm | base64
 
 }

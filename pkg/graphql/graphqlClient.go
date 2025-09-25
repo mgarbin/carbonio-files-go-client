@@ -35,7 +35,7 @@ func (c *Client) GetChildren(
 	pageToken *string,
 	sort string,
 	sharesLimit *int,
-) (data *GetChildrenResponse, err error) {
+) (_data *GetChildrenResponse, err error) {
 	// This is the GraphQL query as a string
 	const query = `
 	query getChildren($node_id: ID!, $children_limit: Int!, $page_token: String, $sort: NodeSort!, $shares_limit: Int = 1) {
@@ -157,12 +157,10 @@ func (c *Client) GetChildren(
 		vars["shares_limit"] = *sharesLimit
 	}
 
+	_data = &GetChildrenResponse{}
 	req := &graphql.Request{Query: query, Variables: vars}
-
-	data = &GetChildrenResponse{}
-	resp := &graphql.Response{Data: data}
-
+	resp := &graphql.Response{Data: _data}
 	err = c.client.MakeRequest(ctx, req, resp)
 
-	return data, err
+	return _data, err
 }

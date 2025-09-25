@@ -29,7 +29,7 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.base.RoundTrip(req)
 }
 
-func (a *GraphQLAuthenticator) GetAllNode(nodeID string) {
+func (a *GraphQLAuthenticator) GetAllNode(nodeID string, sort string, pageToken *string, sharesLimit *int) ([]*Node, error) {
 
 	// Optionally, set up an authenticated HTTP client
 	httpClient := &http.Client{
@@ -42,12 +42,8 @@ func (a *GraphQLAuthenticator) GetAllNode(nodeID string) {
 
 	client := NewClient("https://"+a.Endpoint+"/services/files/graphql", httpClient)
 
+	//hard coded for now
 	childrenLimit := 25
-	sort := "NAME_ASC"         // this should match your GraphQL schema's NodeSort enum
-	var pageToken *string      // nil means no page token
-	var sharesLimit *int = nil // nil will use the default, or set your value
-
-	var resp *GetChildrenResponse
 
 	// Execute the query
 	resp, err := client.GetChildren(
@@ -61,18 +57,35 @@ func (a *GraphQLAuthenticator) GetAllNode(nodeID string) {
 
 	if err != nil {
 		log.Fatalf("GraphQL query failed: %v", err)
+		return nil, err
 	}
 
 	// Print the results
-	if resp.Data.GetNode == nil {
-		fmt.Println("No node found")
-		return
+	if resp.GetNode == nil {
+		//fmt.Println("No node found")
+		return nil, nil
 	}
-	fmt.Printf("Node: %s, Name: %s\n", resp.Data.GetNode.ID, resp.Data.GetNode.Name)
-	if resp.Data.GetNode.Children != nil {
-		fmt.Println("Children:")
-		for _, child := range resp.Data.GetNode.Children.Nodes {
-			fmt.Printf("- Child Node: %s (%s)\n", child.ID, child.Name)
+
+	var children []*Node
+
+	//fmt.Printf("Node: %s, Name: %s\n", resp.GetNode.ID, resp.GetNode.Name)
+	if resp.GetNode.Children != nil {
+
+		if resp.GetNode.Children.PageToken != nil {
+			tokenChild, tokenErr := a.GetAllNode(nodeID, sort, resp.GetNode.Children.PageToken, nil)
+			if tokenErr != nil {
+				return nil, tokenErr
+			}
+			children = append(resp.GetNode.Children.Nodes, tokenChild...)
+			return children, nil
 		}
+
+		return resp.GetNode.Children.Nodes, nil
+		/*fmt.Println("Children:")
+		for _, child := range resp.GetNode.Children.Nodes {
+			fmt.Printf("- Child Node: %s (%s)\n", child.ID, child.Name)
+		}*/
 	}
+
+	return nil, nil
 }

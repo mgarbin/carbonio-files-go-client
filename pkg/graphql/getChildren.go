@@ -1,9 +1,7 @@
 package graphql
 
 type GetChildrenResponse struct {
-	Data struct {
-		GetNode *Node `json:"getNode"`
-	} `json:"data"`
+	GetNode *Node `json:"getNode"`
 }
 
 type Node struct {
@@ -14,17 +12,15 @@ type Node struct {
 	Permissions *Permissions `json:"permissions,omitempty"`
 	Flagged     *bool        `json:"flagged,omitempty"`
 	RootID      *string      `json:"rootId,omitempty"`
-	Children    *Children    `json:"children,omitempty"` // For Folder nodes
-	UpdatedAt   *string      `json:"updated_at,omitempty"`
+	Children    *Children    `json:"children,omitempty"`
+	UpdatedAt   *int64       `json:"updated_at,omitempty"`
 	LastEditor  *User        `json:"last_editor,omitempty"`
 	Shares      []*Share     `json:"shares,omitempty"`
-	// File-specific
-	Size      *int64  `json:"size,omitempty"`
-	MimeType  *string `json:"mime_type,omitempty"`
-	Extension *string `json:"extension,omitempty"`
-	Version   *int    `json:"version,omitempty"`
-	// Typename is always present for GraphQL
-	Typename string `json:"__typename"`
+	Size        *float64     `json:"size,omitempty"`
+	MimeType    *string      `json:"mime_type,omitempty"`
+	Extension   *string      `json:"extension,omitempty"`
+	Version     *int         `json:"version,omitempty"`
+	Typename    string       `json:"__typename"`
 }
 
 type Children struct {
@@ -57,19 +53,13 @@ type User struct {
 type Share struct {
 	Permission  string      `json:"permission"`
 	ShareTarget ShareTarget `json:"share_target"`
-	CreatedAt   string      `json:"created_at"`
+	CreatedAt   int64       `json:"created_at"`
 	Typename    string      `json:"__typename"`
 }
 
-// ShareTarget can be User or DistributionList
 type ShareTarget struct {
-	User             *User             `json:"User,omitempty"`
-	DistributionList *DistributionList `json:"DistributionList,omitempty"`
-	Typename         string            `json:"__typename"`
-}
-
-type DistributionList struct {
 	ID       string `json:"id"`
-	Name     string `json:"name"`
+	FullName string `json:"full_name"`
+	Email    string `json:"email"`
 	Typename string `json:"__typename"`
 }

@@ -25,11 +25,11 @@ func isValidEmail(email string) bool {
 	return err == nil
 }
 
-func (a *HTTPAuthenticator) CarbonioZxAuth(email, password string) (string, error) {
+func (a *HTTPAuthenticator) CarbonioZxAuth(email, password string) (*string, error) {
 
 	// Verify if email respect rfc
 	if !isValidEmail(email) {
-		return "", errors.New("invalid email address format")
+		return nil, errors.New("invalid email address format")
 	}
 
 	// Create payload to inject to zx auth endpoint
@@ -41,13 +41,13 @@ func (a *HTTPAuthenticator) CarbonioZxAuth(email, password string) (string, erro
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	// Make the request
 	req, err := http.NewRequest("POST", "https://"+a.Endpoint+"/zx/auth/v2/login", bytes.NewBuffer(body))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
@@ -62,7 +62,7 @@ func (a *HTTPAuthenticator) CarbonioZxAuth(email, password string) (string, erro
 	// Wait for response
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	defer resp.Body.Close()
@@ -70,10 +70,10 @@ func (a *HTTPAuthenticator) CarbonioZxAuth(email, password string) (string, erro
 	// Read cookies
 	for _, cookie := range resp.Cookies() {
 		if cookie.Name == "ZM_AUTH_TOKEN" {
-			return cookie.Value, nil
+			return &cookie.Value, nil
 		}
 	}
 
-	return "", errors.New("ZM_AUTH_TOKEN cookie not found")
+	return nil, errors.New("ZM_AUTH_TOKEN cookie not found")
 
 }
