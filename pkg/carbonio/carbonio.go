@@ -2,7 +2,9 @@ package carbonio
 
 import (
 	"bytes"
+	"crypto/sha512"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"net/http"
 	"net/mail"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -21,6 +24,7 @@ type Authenticator interface {
 	// returns the value of the ZM_AUTH_TOKEN cookie if authentication succeeds.
 	CarbonioZxAuth(email, password string) (string, error)
 	DownloadFile(token, nodeId, destPath string, fileSize int64, maxRetries int) error
+	UploadFile(token, parentId, filePath string, newVersion, overWriteVersion bool, nodeId *string) error
 }
 
 type HTTPAuthenticator struct {
@@ -98,6 +102,55 @@ func isValidEmail(email string) bool {
 	return err == nil
 }
 
+// Sha384Base64 takes a file path, computes its SHA-384 hash, and returns the hash in base64 encoding.
+func Sha384Base64(filePath string) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	hasher := sha512.New384()
+	if _, err := io.Copy(hasher, file); err != nil {
+		return "", err
+	}
+	hash := hasher.Sum(nil) // []byte, binary SHA-384
+
+	return base64.StdEncoding.EncodeToString(hash), nil
+}
+
+// DetectMimeType returns the MIME type of the given file.
+func DetectMimeType(filePath string) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	buffer := make([]byte, 512)
+	n, err := file.Read(buffer)
+	if err != nil {
+		return "", err
+	}
+
+	mimeType := http.DetectContentType(buffer[:n])
+	return mimeType, nil
+}
+
+// ExtractFileName takes a file path and returns the base file name.
+func ExtractFileName(filePath string) string {
+	return filepath.Base(filePath)
+}
+
+// GetFileContentLength returns the size of the file in bytes.
+func GetFileContentLength(filePath string) (int64, error) {
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
+}
+
 func (a *HTTPAuthenticator) CarbonioZxAuth(email, password string) (*string, error) {
 	// Verify if email respect rfc
 	if !isValidEmail(email) {
@@ -150,7 +203,6 @@ func (a *HTTPAuthenticator) CarbonioZxAuth(email, password string) (*string, err
 }
 
 func (a *HTTPAuthenticator) DownloadFile(token, nodeId, destPath, fileName string, fileSize int64, maxRetries int, wg *sync.WaitGroup, sem chan struct{}) (*string, error) {
-
 	dialer := &net.Dialer{
 		Timeout: 5 * time.Second, // Only dial (connection) timeout
 	}
@@ -261,5 +313,110 @@ func (a *HTTPAuthenticator) DownloadFile(token, nodeId, destPath, fileName strin
 
 	fmt.Println("Error creating file: %s \n", lastErr)
 	return nil, lastErr
+}
 
+func (a *HTTPAuthenticator) UploadFile(
+	token string,
+	parentId string,
+	filePath string,
+	newVersion bool,
+	overWriteVersion bool,
+	nodeId *string,
+) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		fmt.Println("Error: %s \n", err)
+		return err
+	}
+	defer file.Close()
+
+	mimeType, err := DetectMimeType(filePath)
+
+	if err != nil {
+		mimeType = "byte"
+	}
+
+	uploadEndpoint := "upload"
+
+	if newVersion {
+		uploadEndpoint = "upload-version"
+	}
+
+	// Prepare request
+	url := "https://" + a.Endpoint + "/services/files/" + uploadEndpoint
+	req, err := http.NewRequest("POST", url, file)
+	if err != nil {
+		fmt.Println("Error: %s \n", err)
+		return err
+	}
+
+	filename := ExtractFileName(filePath)
+
+	contentLength, err := GetFileContentLength(filePath)
+	if err != nil {
+		fmt.Println("Error: %s \n", err)
+		return err
+	}
+
+	// Set headers
+	//req.Header.Set("AccountId", accountId)
+	encodedFilename := base64.StdEncoding.EncodeToString([]byte(filename))
+
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
+	req.Header.Set("Filename", encodedFilename)
+	req.Header.Set("ParentId", parentId)
+	req.Header.Set("Content-Type", mimeType)
+	req.ContentLength = contentLength
+
+	if newVersion {
+		if overWriteVersion {
+			req.Header.Set("OverwriteVersion", "true")
+		} else {
+			req.Header.Set("OverwriteVersion", "false")
+		}
+		req.Header.Set("NodeId", *nodeId)
+	}
+
+	dialer := &net.Dialer{
+		Timeout: 5 * time.Second, // Only dial (connection) timeout
+	}
+
+	skipInsecure := &tls.Config{InsecureSkipVerify: true}
+
+	// Optionally, set up an authenticated HTTP client
+	httpClient := &http.Client{
+		Transport: &customTransport{
+			DialContext:           dialer,
+			TLSClientConfig:       skipInsecure,
+			DisableKeepAlives:     false,
+			MaxIdleConns:          0,
+			IdleConnTimeout:       0,
+			ExpectContinueTimeout: 1 * time.Second,
+			base:                  http.DefaultTransport,
+			authToken:             token,
+		},
+	}
+
+	// Perform request
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		fmt.Println("Error: %s \n", err)
+		return err
+	}
+	defer resp.Body.Close()
+
+	//body, _ := io.ReadAll(resp.Body)
+	//fmt.Println("Status:", resp.Status)
+	//fmt.Println("Response:", string(body))
+
+	// Optional: Print response status and body
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		fmt.Println("Error: %s \n", string(body))
+		return fmt.Errorf("upload failed: %s", resp.Status)
+	}
+
+	fmt.Println("Response:", string(body))
+
+	return nil
 }

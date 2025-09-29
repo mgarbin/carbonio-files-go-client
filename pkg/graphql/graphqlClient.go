@@ -164,3 +164,116 @@ func (c *Client) GetChildren(
 
 	return _data, err
 }
+
+func (c *Client) CreateFolder(
+	ctx context.Context,
+	parentId string,
+	folderName string,
+	sharesLimit *int,
+) (_data *CreateFolderResponse, err error) {
+	// This is the GraphQL query as a string
+	const query = `
+	mutation createFolder($destination_id: String!, $name: String!, $shares_limit: Int = 1) {
+	createFolder(destination_id: $destination_id, name: $name) {
+		...Child
+		parent {
+		id
+		name
+		__typename
+		}
+		__typename
+	}
+	}
+
+	fragment Child on Node {
+	...BaseNode
+	owner {
+		id
+		full_name
+		email
+		__typename
+	}
+	updated_at
+	last_editor {
+		id
+		full_name
+		email
+		__typename
+	}
+	shares(limit: $shares_limit) {
+		...Share
+		__typename
+	}
+	__typename
+	}
+
+	fragment BaseNode on Node {
+	id
+	name
+	type
+	...Permissions
+	... on File {
+		size
+		mime_type
+		extension
+		version
+		__typename
+	}
+	flagged
+	rootId
+	__typename
+	}
+
+	fragment Permissions on Node {
+	permissions {
+		can_read
+		can_write_file
+		can_write_folder
+		can_delete
+		can_add_version
+		can_read_link
+		can_change_link
+		can_share
+		can_read_share
+		can_change_share
+		__typename
+	}
+	__typename
+	}
+
+	fragment Share on Share {
+	permission
+	share_target {
+		... on User {
+		email
+		full_name
+		id
+		__typename
+		}
+		... on DistributionList {
+		id
+		name
+		__typename
+		}
+		__typename
+	}
+	created_at
+	__typename
+	}
+	`
+
+	vars := map[string]interface{}{
+		"destination_id": parentId,
+		"name":           folderName,
+	}
+	if sharesLimit != nil {
+		vars["shares_limit"] = *sharesLimit
+	}
+
+	_data = &CreateFolderResponse{}
+	req := &graphql.Request{Query: query, Variables: vars}
+	resp := &graphql.Response{Data: _data}
+	err = c.client.MakeRequest(ctx, req, resp)
+
+	return _data, err
+}

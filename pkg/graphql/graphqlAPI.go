@@ -30,7 +30,6 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func (a *GraphQLAuthenticator) GetAllNode(nodeID string, sort string, pageToken *string, sharesLimit *int) ([]*Node, error) {
-
 	// Optionally, set up an authenticated HTTP client
 	httpClient := &http.Client{
 		Timeout: 10 * time.Second,
@@ -88,4 +87,40 @@ func (a *GraphQLAuthenticator) GetAllNode(nodeID string, sort string, pageToken 
 	}
 
 	return nil, nil
+}
+
+func (a *GraphQLAuthenticator) CreateFolder(parentId string, folderName string) (*Folder, error) {
+	// Optionally, set up an authenticated HTTP client
+	httpClient := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &customTransport{
+			base:      http.DefaultTransport,
+			authToken: a.AuthToken,
+		},
+	}
+
+	client := NewClient("https://"+a.Endpoint+"/services/files/graphql", httpClient)
+
+	//hard coded for now
+	sharesLimit := 6
+
+	// Execute the query
+	resp, err := client.CreateFolder(
+		context.Background(),
+		parentId,
+		folderName,
+		&sharesLimit,
+	)
+
+	if err != nil {
+		log.Fatalf("GraphQL query failed: %v", err)
+		return nil, err
+	}
+
+	// Print the results
+	if resp.CreateFolder.ID == "" {
+		return nil, nil
+	}
+
+	return resp.CreateFolder, nil
 }

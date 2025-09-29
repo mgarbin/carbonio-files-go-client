@@ -142,7 +142,6 @@ func recursiveFileDownloader(graphqlAuthenticator *graphql.GraphQLAuthenticator,
 }
 
 func main() {
-
 	cfg, err := LoadConfig("config.yaml")
 	if err != nil {
 		panic(err)
@@ -170,7 +169,13 @@ func main() {
 
 	listAllNode := flag.Bool("getAllNode", false, "Use this flag to obtain all files node")
 	downloadAllFiles := flag.Bool("downloadAllFiles", false, "Use this flag to create Folder directory tree and download all files")
+	createFolder := flag.String("createFolder", "", "Use this flag to create a folder (specify Name) then specify a parentId where to create it")
 	printFlagInfo := flag.Bool("v", false, "output helper with all flags")
+	uploadFile := flag.String("uploadFile", "", "Use this flag to upload a specific file into files, specify also parentId")
+	uploadNewVersionFile := flag.String("uploadNewVersionFile", "", "Use this flag to upload a specific file into files, specify also nodeId and parentId")
+	overwriteVersion := flag.Bool("overwriteVersion", false, "Use this flag to overwrite a file during the uploadNewVersionFile")
+	nodeId := flag.String("nodeId", "", "Use this flag to specify NodeId")
+	parentId := flag.String("parentId", "", "Use this flag to specify ParentId")
 
 	flag.Parse()
 
@@ -191,6 +196,23 @@ func main() {
 		recursiveFileDownloader(graphqlAuthenticator, carbonio, base_folder, "files")
 	}
 
-	//obatin hash file openssl sha384 -binary /tmp/Rec_2025-09-09_1512_Hyperion_meeting_Agosto_2025_upgrade_25.6.webm | base64
+	if *uploadFile != "" && *parentId != "" {
+		//parentId := "e5174e4d-7b01-4510-a56b-30075e84cd8f"
+		carbonio.UploadFile(*zmAuthToken, *parentId, *uploadFile, false, false, nodeId)
+	}
 
+	if *uploadNewVersionFile != "" && *nodeId != "" && *parentId != "" {
+		//base_folder := "e5174e4d-7b01-4510-a56b-30075e84cd8f"
+		carbonio.UploadFile(*zmAuthToken, *parentId, *uploadNewVersionFile, true, *overwriteVersion, nodeId)
+	}
+
+	if *createFolder != "" && *parentId != "" {
+		graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: cfg.Main.Endpoint, AuthToken: *zmAuthToken}
+		newFolder, err := graphqlAuthenticator.CreateFolder(*parentId, *createFolder)
+		if err != nil {
+			fmt.Println("[ERROR]: ", err)
+		} else {
+			fmt.Println("[INFO] New folder id ", newFolder.ID)
+		}
+	}
 }
