@@ -20,6 +20,7 @@ type Node struct {
 	MimeType    *string      `json:"mime_type,omitempty"`
 	Extension   *string      `json:"extension,omitempty"`
 	Version     *int         `json:"version,omitempty"`
+	Digest      *string      `json:"digest,omitempty"`
 	Typename    string       `json:"__typename"`
 }
 

@@ -2,6 +2,7 @@ package graphql
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log"
 	"net/http"
@@ -19,8 +20,9 @@ type GraphQLAuthenticator struct {
 
 // customTransport adds the Cookie header to every request
 type customTransport struct {
-	base      http.RoundTripper
-	authToken string
+	base            http.RoundTripper
+	TLSClientConfig *tls.Config
+	authToken       string
 }
 
 func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -34,8 +36,9 @@ func (a *GraphQLAuthenticator) GetAllNode(nodeID string, sort string, pageToken 
 	httpClient := &http.Client{
 		Timeout: 10 * time.Second,
 		Transport: &customTransport{
-			base:      http.DefaultTransport,
-			authToken: a.AuthToken,
+			base:            http.DefaultTransport,
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			authToken:       a.AuthToken,
 		},
 	}
 
@@ -94,8 +97,9 @@ func (a *GraphQLAuthenticator) CreateFolder(parentId string, folderName string) 
 	httpClient := &http.Client{
 		Timeout: 10 * time.Second,
 		Transport: &customTransport{
-			base:      http.DefaultTransport,
-			authToken: a.AuthToken,
+			base:            http.DefaultTransport,
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			authToken:       a.AuthToken,
 		},
 	}
 

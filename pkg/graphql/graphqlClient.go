@@ -88,6 +88,7 @@ func (c *Client) GetChildren(
 		mime_type
 		extension
 		version
+		digest
 		__typename
 	  }
 	  flagged

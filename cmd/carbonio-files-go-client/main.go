@@ -64,15 +64,15 @@ func recursiveListNode(graphqlAuthenticator *graphql.GraphQLAuthenticator, id st
 			recursiveListNode(graphqlAuthenticator, child.ID, level+1)
 		} else {
 			if child.Extension != nil {
-				fmt.Printf("%s.%s (%s) \n", child.Name, *child.Extension, child.Type)
+				fmt.Printf("%s.%s (%s) - DIGEST [%s] \n", child.Name, *child.Extension, child.Type, *child.Digest)
 			} else {
-				fmt.Printf("%s (%s) \n", child.Name, child.Type)
+				fmt.Printf("%s (%s) - DIGEST [%s]\n", child.Name, child.Type, *child.Digest)
 			}
 		}
 	}
 }
 
-func createFolder(path string) error {
+func createLocalFolder(path string) error {
 	err := os.Mkdir(path, 0755)
 	if err != nil {
 		if os.IsExist(err) {
@@ -101,7 +101,7 @@ func recursiveFileDownloader(graphqlAuthenticator *graphql.GraphQLAuthenticator,
 		if child.Type == "FOLDER" {
 			folderPath := folderPath + "/" + child.Name
 			//fmt.Printf(folderPath + "\n")
-			err := createFolder(folderPath)
+			err := createLocalFolder(folderPath)
 			if err != nil {
 				fmt.Errorf("folder create error: %w", err)
 			}
@@ -215,4 +215,5 @@ func main() {
 			fmt.Println("[INFO] New folder id ", newFolder.ID)
 		}
 	}
+	//BIDIRECTIONAL-SYSNC TODO percorso locale, nodeid locale, nodeid remoto, digest remoto, digest locale,modify timestamp remoto, modify timestamp locale, version remota, size locale, size remoto
 }
