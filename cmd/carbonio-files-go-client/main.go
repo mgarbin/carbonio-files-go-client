@@ -565,7 +565,17 @@ func main() {
 				if id, ok := pathToNodeID[parentPath]; ok {
 					parentNodeID = id
 				} else {
-					fmt.Printf("[WARN] remote parent folder %s not found in cache, using LOCAL_ROOT for %s\n", parentPath, rec.LocalPath)
+					// Fall back to a direct DB lookup for an existing folder at that path
+					parentRec, dbErr := cacheDb.QueryFolderByPath(parentPath)
+					if dbErr != nil {
+						fmt.Printf("[ERROR] failed to query parent folder %s: %v\n", parentPath, dbErr)
+					}
+					if parentRec != nil && parentRec.NodeID != "" {
+						parentNodeID = parentRec.NodeID
+						pathToNodeID[parentPath] = parentRec.NodeID
+					} else {
+						fmt.Printf("[WARN] remote parent folder %s not found in cache, using LOCAL_ROOT for %s\n", parentPath, rec.LocalPath)
+					}
 				}
 			}
 			if rec.IsDirectory {
