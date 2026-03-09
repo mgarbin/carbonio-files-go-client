@@ -9,6 +9,9 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -234,6 +237,7 @@ func main() {
 	liveSyncCheck := flag.Bool("liveSyncCheck", false, "Use this flag to check differences between local folder and remote folder")
 	cacheSync := flag.Bool("cacheSync", false, "Use this flag to enable sqlite cache for liveSyncCheck")
 	initCacheSync := flag.Bool("initCacheSync", false, "Use this flag to initialize sqlite cache for liveSyncCheck")
+	liveCacheSync := flag.Bool("liveCacheSync", false, "Use this flag to sync local and remote files using the sqlite cache db (downloads remote_only items, uploads local_only items)")
 
 	flag.Parse()
 
@@ -430,6 +434,173 @@ func main() {
 		}
 
 		fmt.Printf("Cache sync initialized with %d items\n", insertCount)
+	}
+
+	if *liveCacheSync {
+
+		// Open the existing SQLite cache database
+		cacheDb, err := sqlitecache.NewSqliteHelper("./file_sync_cache.db")
+		if err != nil {
+			fmt.Println("Error opening cache:", err)
+			return
+		}
+		defer cacheDb.Close()
+
+		graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: cfg.Main.Endpoint, AuthToken: *zmAuthToken}
+
+		// Build a path → node_id map from every record that already has a remote presence
+		allRecords, err := cacheDb.QueryAll()
+		if err != nil {
+			fmt.Println("Error querying cache:", err)
+			return
+		}
+		pathToNodeID := make(map[string]string)
+		for _, rec := range allRecords {
+			if rec.NodeID != "" && rec.RemotePath != "" {
+				pathToNodeID[rec.RemotePath] = rec.NodeID
+			}
+		}
+
+		maxRetries := 3
+		now := time.Now().Format(time.RFC3339)
+
+		// --- Download remote_only items to local ---
+		remoteOnly, err := cacheDb.QueryBySyncStatus("remote_only")
+		if err != nil {
+			fmt.Println("Error querying remote_only:", err)
+			return
+		}
+		fmt.Printf("[INFO] Found %d remote_only items to download\n", len(remoteOnly))
+
+		// Process shallowest paths first so parent directories are created before children
+		sort.Slice(remoteOnly, func(i, j int) bool {
+			return strings.Count(remoteOnly[i].RemotePath, "/") < strings.Count(remoteOnly[j].RemotePath, "/")
+		})
+
+		for _, rec := range remoteOnly {
+			if rec.Deleted {
+				continue
+			}
+			if rec.IsDirectory {
+				localDirPath := filepath.Join("./files", filepath.FromSlash(rec.RemotePath))
+				if err := os.MkdirAll(localDirPath, 0755); err != nil {
+					fmt.Printf("[ERROR] creating local dir %s: %v\n", localDirPath, err)
+					continue
+				}
+				fmt.Printf("[INFO] Created local dir: %s\n", localDirPath)
+				if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
+					"local_path":      rec.RemotePath,
+					"local_path_hash": localfs.PathHash(rec.RemotePath),
+					"sync_status":     "synced",
+					"last_synced":     now,
+				}); updateErr != nil {
+					fmt.Printf("[WARN] DB update for %s: %v\n", rec.RemotePath, updateErr)
+				}
+			} else {
+				dirPart := path.Dir(rec.RemotePath)
+				fileName := path.Base(rec.RemotePath)
+				destPath := "./files"
+				if dirPart != "." {
+					destPath = filepath.Join("./files", filepath.FromSlash(dirPart))
+				}
+				if err := os.MkdirAll(destPath, 0755); err != nil {
+					fmt.Printf("[ERROR] creating local dir %s: %v\n", destPath, err)
+					continue
+				}
+				var wg sync.WaitGroup
+				sem := make(chan struct{}, 1)
+				wg.Add(1)
+				sem <- struct{}{}
+				exitStat, downErr := carbonio.DownloadFile(*zmAuthToken, rec.NodeID, destPath, fileName, rec.RemoteSize, maxRetries, &wg, sem)
+				wg.Wait()
+				if downErr != nil {
+					fmt.Printf("[ERROR] downloading %s: %v\n", rec.RemotePath, downErr)
+					continue
+				} else if exitStat != nil {
+					fmt.Printf("[INFO] %s - %s\n", *exitStat, rec.RemotePath)
+				}
+				if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
+					"local_path":      rec.RemotePath,
+					"local_path_hash": localfs.PathHash(rec.RemotePath),
+					"local_size":      rec.RemoteSize,
+					"local_digest":    rec.RemoteDigest,
+					"sync_status":     "synced",
+					"last_synced":     now,
+				}); updateErr != nil {
+					fmt.Printf("[WARN] DB update for %s: %v\n", rec.RemotePath, updateErr)
+				}
+			}
+		}
+
+		// --- Upload local_only items to remote ---
+		localOnly, err := cacheDb.QueryBySyncStatus("local_only")
+		if err != nil {
+			fmt.Println("Error querying local_only:", err)
+			return
+		}
+		fmt.Printf("[INFO] Found %d local_only items to upload\n", len(localOnly))
+
+		// Process shallowest paths first so parent folders are created on remote before their children
+		sort.Slice(localOnly, func(i, j int) bool {
+			return strings.Count(localOnly[i].LocalPath, "/") < strings.Count(localOnly[j].LocalPath, "/")
+		})
+
+		for _, rec := range localOnly {
+			if rec.Deleted {
+				continue
+			}
+			parentPath := path.Dir(rec.LocalPath)
+			parentNodeID := "LOCAL_ROOT"
+			if parentPath != "." {
+				if id, ok := pathToNodeID[parentPath]; ok {
+					parentNodeID = id
+				} else {
+					fmt.Printf("[WARN] remote parent folder %s not found in cache, using LOCAL_ROOT for %s\n", parentPath, rec.LocalPath)
+				}
+			}
+			if rec.IsDirectory {
+				folderName := path.Base(rec.LocalPath)
+				newFolder, err := graphqlAuthenticator.CreateFolder(parentNodeID, folderName)
+				if err != nil {
+					fmt.Printf("[ERROR] creating remote folder %s: %v\n", rec.LocalPath, err)
+					continue
+				}
+				if newFolder != nil {
+					pathToNodeID[rec.LocalPath] = newFolder.ID
+					fmt.Printf("[INFO] Created remote folder: %s (id: %s)\n", rec.LocalPath, newFolder.ID)
+					if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
+						"node_id":          newFolder.ID,
+						"remote_path":      rec.LocalPath,
+						"remote_path_hash": localfs.PathHash(rec.LocalPath),
+						"sync_status":      "synced",
+						"last_synced":      now,
+					}); updateErr != nil {
+						fmt.Printf("[WARN] DB update for %s: %v\n", rec.LocalPath, updateErr)
+					}
+				}
+			} else {
+				filePath := filepath.Join("./files", filepath.FromSlash(rec.LocalPath))
+				if uploadErr := carbonio.UploadFile(*zmAuthToken, parentNodeID, filePath, false, false, nil); uploadErr != nil {
+					fmt.Printf("[ERROR] uploading %s: %v\n", rec.LocalPath, uploadErr)
+					continue
+				}
+				fmt.Printf("[INFO] Uploaded: %s\n", rec.LocalPath)
+				// Note: the upload API does not return the new remote node_id; a subsequent
+				// initCacheSync run is needed to populate node_id for newly uploaded files.
+				if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
+					"remote_path":      rec.LocalPath,
+					"remote_path_hash": localfs.PathHash(rec.LocalPath),
+					"remote_size":      rec.LocalSize,
+					"remote_digest":    rec.LocalDigest,
+					"sync_status":      "synced",
+					"last_synced":      now,
+				}); updateErr != nil {
+					fmt.Printf("[WARN] DB update for %s: %v\n", rec.LocalPath, updateErr)
+				}
+			}
+		}
+
+		fmt.Println("[INFO] liveCacheSync completed.")
 	}
 
 }

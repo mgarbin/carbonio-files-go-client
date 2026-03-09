@@ -12,6 +12,27 @@ type SqliteHelper struct {
 	DB *sql.DB
 }
 
+// FileSyncRecord represents a row in the filesync table.
+type FileSyncRecord struct {
+	ID                 int64
+	NodeID             string
+	ParentID           string
+	RemotePath         string
+	RemotePathHash     string
+	LocalPath          string
+	LocalPathHash      string
+	IsDirectory        bool
+	RemoteLastModified string
+	LocalLastModified  string
+	RemoteSize         int64
+	LocalSize          int64
+	RemoteDigest       string
+	LocalDigest        string
+	SyncStatus         string
+	LastSynced         string
+	Deleted            bool
+}
+
 // NewSqliteHelper crea/apre il database e assicura che la tabella filesync esista.
 func NewSqliteHelper(dbPath string) (*SqliteHelper, error) {
 	// Crea file vuoto se non esiste
@@ -152,4 +173,54 @@ func (h *SqliteHelper) DeleteAllAndResetAutoIncrement() error {
 // Chiudi la connessione
 func (h *SqliteHelper) Close() error {
 	return h.DB.Close()
+}
+
+const selectAllColumns = `SELECT id, node_id, parent_id, remote_path, remote_path_hash, local_path, local_path_hash,
+	is_directory, remote_last_modified, local_last_modified, remote_size, local_size,
+	remote_digest, local_digest, sync_status, last_synced, deleted FROM filesync`
+
+// QueryAll returns all records from the filesync table.
+func (h *SqliteHelper) QueryAll() ([]FileSyncRecord, error) {
+	rows, err := h.DB.Query(selectAllColumns)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanFileSyncRows(rows)
+}
+
+// QueryBySyncStatus returns all records with the given sync_status value.
+func (h *SqliteHelper) QueryBySyncStatus(status string) ([]FileSyncRecord, error) {
+	rows, err := h.DB.Query(selectAllColumns+` WHERE sync_status = ?`, status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanFileSyncRows(rows)
+}
+
+func scanFileSyncRows(rows *sql.Rows) ([]FileSyncRecord, error) {
+	var records []FileSyncRecord
+	for rows.Next() {
+		var rec FileSyncRecord
+		var isDirInt, deletedInt int
+		err := rows.Scan(
+			&rec.ID, &rec.NodeID, &rec.ParentID,
+			&rec.RemotePath, &rec.RemotePathHash,
+			&rec.LocalPath, &rec.LocalPathHash,
+			&isDirInt,
+			&rec.RemoteLastModified, &rec.LocalLastModified,
+			&rec.RemoteSize, &rec.LocalSize,
+			&rec.RemoteDigest, &rec.LocalDigest,
+			&rec.SyncStatus, &rec.LastSynced,
+			&deletedInt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		rec.IsDirectory = isDirInt != 0
+		rec.Deleted = deletedInt != 0
+		records = append(records, rec)
+	}
+	return records, rows.Err()
 }
