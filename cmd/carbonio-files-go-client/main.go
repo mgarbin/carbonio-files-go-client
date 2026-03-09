@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -313,14 +315,121 @@ func main() {
 
 	if *initCacheSync {
 
-		// start sqlite cache
+		// Initialize SQLite database
 		newdb, err := sqlitecache.NewSqliteHelper("./file_sync_cache.db")
 		if err != nil {
 			fmt.Println("Error:", err)
 			return
 		}
-
+		defer newdb.Close()
 		fmt.Println("Sqlite cache initialized successfully:", newdb.DB)
+
+		// Clear existing data and reset auto-increment
+		err = newdb.DeleteAllAndResetAutoIncrement()
+		if err != nil {
+			fmt.Println("Error clearing cache:", err)
+			return
+		}
+
+		// Read local filesystem items
+		localFolder := "./files"
+		localMapItems, err := localfs.ReadFolderRecursive(localFolder)
+		if err != nil {
+			fmt.Println("Error reading local folder:", err)
+			return
+		}
+		fmt.Printf("Found %d local items\n", len(localMapItems))
+
+		// Fetch remote items from GraphQL
+		graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: cfg.Main.Endpoint, AuthToken: *zmAuthToken}
+		baseFolder := "LOCAL_ROOT"
+		remoteMapItems, err := recursiveListNodeItems(graphqlAuthenticator, baseFolder, "")
+		if err != nil {
+			fmt.Println("Error fetching remote items:", err)
+			return
+		}
+		fmt.Printf("Found %d remote items\n", len(remoteMapItems))
+
+		// Build union of all paths from local and remote
+		allPaths := make(map[string]struct{})
+		for path := range localMapItems {
+			allPaths[path] = struct{}{}
+		}
+		for path := range remoteMapItems {
+			allPaths[path] = struct{}{}
+		}
+
+		// Insert each item into SQLite
+		now := time.Now().Format(time.RFC3339)
+		insertCount := 0
+		for path := range allPaths {
+			localItem, hasLocal := localMapItems[path]
+			remoteItem, hasRemote := remoteMapItems[path]
+
+			nodeID := ""
+			isDirectory := false
+			remotePath := ""
+			remotePathHash := ""
+			localPath := ""
+			localPathHash := ""
+			remoteLastModified := ""
+			localLastModified := ""
+			var remoteSize int64
+			var localSize int64
+			remoteDigest := ""
+			localDigest := ""
+			deleted := false
+
+			if hasRemote {
+				remotePath = path
+				remotePathHash = localfs.PathHash(path)
+				nodeID = remoteItem.NodeId
+				isDirectory = !remoteItem.IsFile
+				remoteLastModified = strconv.FormatInt(remoteItem.ModifyTimestamp, 10)
+				remoteSize = int64(remoteItem.Size)
+				remoteDigest = remoteItem.Digest
+				deleted = remoteItem.DeleteTimestamp != 0
+			}
+
+			if hasLocal {
+				localPath = path
+				localPathHash = localfs.PathHash(path)
+				isDirectory = !localItem.IsFile
+				localLastModified = strconv.FormatInt(localItem.ModifyTimestamp, 10)
+				localSize = int64(localItem.Size)
+				localDigest = localItem.Digest
+			}
+
+			// Determine sync status based on presence and content comparison
+			syncStatus := "unknown"
+			if hasLocal && hasRemote {
+				if localDigest == remoteDigest && localSize == remoteSize {
+					syncStatus = "synced"
+				} else {
+					syncStatus = "out_of_sync"
+				}
+			} else if hasLocal {
+				syncStatus = "local_only"
+			} else if hasRemote {
+				syncStatus = "remote_only"
+			}
+
+			_, insertErr := newdb.InsertFileSync(
+				nodeID, "", remotePath, remotePathHash, localPath, localPathHash,
+				isDirectory,
+				remoteLastModified, localLastModified,
+				remoteSize, localSize,
+				remoteDigest, localDigest, syncStatus, now,
+				deleted,
+			)
+			if insertErr != nil {
+				fmt.Printf("Error inserting %s: %v\n", path, insertErr)
+			} else {
+				insertCount++
+			}
+		}
+
+		fmt.Printf("Cache sync initialized with %d items\n", insertCount)
 	}
 
 }
