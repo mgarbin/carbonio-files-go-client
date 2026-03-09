@@ -4,6 +4,7 @@ go 1.24.6
 
 require (
 	github.com/Khan/genqlient v0.8.1
+	github.com/andybalholm/brotli v1.2.0
 	github.com/fsnotify/fsnotify v1.9.0
 	golang.org/x/text v0.34.0
 	gopkg.in/yaml.v3 v3.0.1
