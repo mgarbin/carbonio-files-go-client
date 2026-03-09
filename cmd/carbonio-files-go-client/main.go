@@ -3,8 +3,11 @@ package main
 import (
 	"carbonio-files-go-client/pkg/carbonio"
 	"carbonio-files-go-client/pkg/graphql"
+	"carbonio-files-go-client/pkg/localfs"
+	sqlitecache "carbonio-files-go-client/pkg/sqlite"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"strings"
 	"sync"
@@ -41,6 +44,57 @@ func printAllFlags() {
 	flag.VisitAll(func(f *flag.Flag) {
 		fmt.Printf("  -%s: %s (default: %q)\n", f.Name, f.Usage, f.DefValue)
 	})
+}
+
+func recursiveListNodeItems(graphqlAuthenticator *graphql.GraphQLAuthenticator, id string, folderPath string) (map[string]localfs.ItemInfo, error) {
+
+	items := make(map[string]localfs.ItemInfo)
+
+	nodes, nodesErr := graphqlAuthenticator.GetAllNode(id, "NAME_ASC", nil, nil)
+	if nodesErr != nil {
+		panic(nodesErr)
+	}
+
+	for _, child := range nodes {
+
+		item := localfs.ItemInfo{}
+		currentFilePath := ""
+
+		if child.Type == "FOLDER" {
+			item.IsFile = false
+			newFolderPath := ""
+			if folderPath == "" {
+				newFolderPath = child.Name
+			} else {
+				newFolderPath = folderPath + "/" + child.Name
+			}
+			newNodeItems, err := recursiveListNodeItems(graphqlAuthenticator, child.ID, newFolderPath)
+			if err != nil {
+				return nil, err
+			}
+			maps.Insert(items, maps.All(newNodeItems))
+			items[newFolderPath] = item
+		} else {
+			item.IsFile = true
+			item.NodeId = child.ID
+			item.Digest = *child.Digest
+			item.Size = *child.Size
+			item.ModifyTimestamp = *child.UpdatedAt
+			item.FileVersion = *child.Version
+			fileName := child.Name
+			if child.Extension != nil {
+				fileName = child.Name + "." + *child.Extension
+			}
+			if folderPath == "" {
+				currentFilePath = fileName
+			} else {
+				currentFilePath = folderPath + "/" + fileName
+			}
+			items[currentFilePath] = item
+		}
+	}
+
+	return items, nil
 }
 
 func recursiveListNode(graphqlAuthenticator *graphql.GraphQLAuthenticator, id string, level int) {
@@ -100,7 +154,6 @@ func recursiveFileDownloader(graphqlAuthenticator *graphql.GraphQLAuthenticator,
 	for _, child := range nodes {
 		if child.Type == "FOLDER" {
 			folderPath := folderPath + "/" + child.Name
-			//fmt.Printf(folderPath + "\n")
 			err := createLocalFolder(folderPath)
 			if err != nil {
 				fmt.Errorf("folder create error: %w", err)
@@ -176,6 +229,9 @@ func main() {
 	overwriteVersion := flag.Bool("overwriteVersion", false, "Use this flag to overwrite a file during the uploadNewVersionFile")
 	nodeId := flag.String("nodeId", "", "Use this flag to specify NodeId")
 	parentId := flag.String("parentId", "", "Use this flag to specify ParentId")
+	liveSyncCheck := flag.Bool("liveSyncCheck", false, "Use this flag to check differences between local folder and remote folder")
+	cacheSync := flag.Bool("cacheSync", false, "Use this flag to enable sqlite cache for liveSyncCheck")
+	initCacheSync := flag.Bool("initCacheSync", false, "Use this flag to initialize sqlite cache for liveSyncCheck")
 
 	flag.Parse()
 
@@ -215,5 +271,56 @@ func main() {
 			fmt.Println("[INFO] New folder id ", newFolder.ID)
 		}
 	}
-	//BIDIRECTIONAL-SYSNC TODO percorso locale, nodeid locale, nodeid remoto, digest remoto, digest locale,modify timestamp remoto, modify timestamp locale, version remota, size locale, size remoto
+
+	if *liveSyncCheck {
+
+		if *cacheSync {
+			fmt.Println("Cache sync not yet implemented")
+		}
+
+		localFolder := "./files"
+
+		localMapItems, err := localfs.ReadFolderRecursive(localFolder)
+		if err != nil {
+			fmt.Println("Error:", err)
+			return
+		}
+
+		graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: cfg.Main.Endpoint, AuthToken: *zmAuthToken}
+		base_folder := "LOCAL_ROOT"
+
+		remoteMapItems, err := recursiveListNodeItems(graphqlAuthenticator, base_folder, "")
+		if err != nil {
+			fmt.Println("Error:", err)
+			return
+		}
+
+		diffs := localfs.ComparePathMapsMulti(localMapItems, remoteMapItems)
+		for path, diffList := range diffs {
+			fmt.Printf("Path: %s\n", path)
+			for _, diff := range diffList {
+				fmt.Printf("  Difference: %s\n", diff.Diff)
+				if diff.Local != nil {
+					fmt.Printf("    Local: %+v\n", *diff.Local)
+				}
+				if diff.Remote != nil {
+					fmt.Printf("    Remote: %+v\n", *diff.Remote)
+				}
+			}
+		}
+
+	}
+
+	if *initCacheSync {
+
+		// start sqlite cache
+		newdb, err := sqlitecache.NewSqliteHelper("./file_sync_cache.db")
+		if err != nil {
+			fmt.Println("Error:", err)
+			return
+		}
+
+		fmt.Println("Sqlite cache initialized successfully:", newdb.DB)
+	}
+
 }
