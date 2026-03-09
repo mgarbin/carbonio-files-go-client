@@ -82,7 +82,7 @@ func (h *SqliteHelper) InsertFileSync(
         INSERT INTO filesync (
             node_id, parent_id, remote_path, remote_path_hash, local_path, local_path_hash, is_directory, remote_last_modified, local_last_modified,
             remote_size, local_size, remote_digest, local_digest, sync_status, last_synced, deleted
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	res, err := h.DB.Exec(stmt,
 		nodeID, parentID, remotePath, remotePathHash, localPath, localPathHash, isDirectory, remoteLastModified, localLastModified,
 		remoteSize, localSize, remoteDigest, localDigest, syncStatus, lastSynced, deleted)
