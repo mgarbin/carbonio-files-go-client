@@ -403,7 +403,8 @@ func main() {
 			var localSize int64
 			remoteDigest := ""
 			localDigest := ""
-			deleted := false
+			localDeleted := 0
+			remoteDeleted := 0
 
 			if hasRemote {
 				remotePath = path
@@ -413,7 +414,9 @@ func main() {
 				remoteLastModified = strconv.FormatInt(remoteItem.ModifyTimestamp, 10)
 				remoteSize = int64(remoteItem.Size)
 				remoteDigest = remoteItem.Digest
-				deleted = remoteItem.DeleteTimestamp != 0
+				if remoteItem.DeleteTimestamp != 0 {
+					remoteDeleted = 1
+				}
 				if debug {
 					fmt.Printf("Processing remote item: %s (nodeId: %s)\n", path, nodeID)
 				}
@@ -451,7 +454,7 @@ func main() {
 				remoteLastModified, localLastModified,
 				remoteSize, localSize,
 				remoteDigest, localDigest, syncStatus, now,
-				deleted,
+				localDeleted, remoteDeleted,
 			)
 			if insertErr != nil {
 				fmt.Printf("Error inserting %s: %v\n", path, insertErr)
@@ -505,7 +508,7 @@ func main() {
 		})
 
 		for _, rec := range remoteOnly {
-			if rec.Deleted {
+			if rec.RemoteDeleted != 0 {
 				continue
 			}
 			if rec.IsDirectory {
@@ -573,7 +576,7 @@ func main() {
 		})
 
 		for _, rec := range localOnly {
-			if rec.Deleted {
+			if rec.LocalDeleted != 0 {
 				continue
 			}
 			parentPath := path.Dir(rec.LocalPath)
@@ -597,7 +600,7 @@ func main() {
 						if parentRec.RemotePath != parentPath {
 							fmt.Printf("[WARN] remote path mismatch for parent folder %s: cache has %s\n", parentPath, parentRec.RemotePath)
 						}
-						if parentRec.Deleted {
+						if parentRec.LocalDeleted != 0 || parentRec.RemoteDeleted != 0 {
 							fmt.Printf("[WARN] parent folder %s is marked deleted in cache, using LOCAL_ROOT as parent for %s\n", parentPath, rec.LocalPath)
 							parentNodeID = "LOCAL_ROOT"
 						}
