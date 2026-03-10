@@ -237,8 +237,8 @@ func main() {
 	parentId := flag.String("parentId", "", "Use this flag to specify ParentId")
 	liveSyncCheck := flag.Bool("liveSyncCheck", false, "Use this flag to check differences between local folder and remote folder")
 	cacheSync := flag.Bool("cacheSync", false, "Use this flag to enable sqlite cache for liveSyncCheck")
-	initCacheSync := flag.Bool("initCacheSync", false, "Use this flag to initialize sqlite cache for liveSyncCheck")
-	liveCacheSync := flag.Bool("liveCacheSync", false, "Use this flag to sync local and remote files using the sqlite cache db (downloads remote_only items, uploads local_only items)")
+	initCacheSync := flag.Bool("initCacheSync", false, "Use this flag to initialize sqlite cache for liveSyncCheck and update file records with local and remote info")
+	liveCacheSync := flag.Bool("liveCacheSync", false, "Use this flag to sync local and remote files using the sqlite cache db")
 
 	flag.Parse()
 
