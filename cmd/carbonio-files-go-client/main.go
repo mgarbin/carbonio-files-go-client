@@ -330,11 +330,6 @@ func main() {
 
 	if *initCacheSync {
 
-		debug := false
-		if debug {
-			fmt.Println("Debug mode enabled: verbose output of processing steps")
-		}
-
 		// Initialize SQLite database
 		newdb, err := sqlitecache.NewSqliteHelper("./file_sync_cache.db")
 		if err != nil {
@@ -342,19 +337,7 @@ func main() {
 			return
 		}
 		defer newdb.Close()
-
-		if debug {
-			fmt.Printf("SQLite cache initialized at %s\n", newdb.DB)
-		} else {
-			fmt.Println("SQLite cache initialized successfully")
-		}
-
-		// Clear existing data and reset auto-increment
-		err = newdb.DeleteAllAndResetAutoIncrement()
-		if err != nil {
-			fmt.Println("Error clearing cache:", err)
-			return
-		}
+		fmt.Println("SQLite cache initialized successfully")
 
 		// Read local filesystem items
 		localFolder := "./files"
@@ -375,21 +358,83 @@ func main() {
 		}
 		fmt.Printf("Found %d remote items\n", len(remoteMapItems))
 
-		// Build union of all paths from local and remote
-		allPaths := make(map[string]struct{})
-		for path := range localMapItems {
-			allPaths[path] = struct{}{}
-		}
-		for path := range remoteMapItems {
-			allPaths[path] = struct{}{}
+		// Check if the database is already populated
+		count, countErr := newdb.CountRecords()
+		if countErr != nil {
+			fmt.Println("Error counting records:", countErr)
+			return
 		}
 
-		// Insert each item into SQLite
 		now := time.Now().Format(time.RFC3339)
 		insertCount := 0
-		for path := range allPaths {
-			localItem, hasLocal := localMapItems[path]
-			remoteItem, hasRemote := remoteMapItems[path]
+
+		// trackedPaths collects every path already covered by an existing DB record.
+		// New paths not present in this set will be inserted as fresh entries.
+		trackedPaths := make(map[string]struct{})
+
+		if count > 0 {
+			// DB is already populated: detect which local or remote files have been deleted
+			// and update their flags accordingly.
+			allRecords, err := newdb.QueryAll()
+			if err != nil {
+				fmt.Println("Error querying existing records:", err)
+				return
+			}
+
+			for _, rec := range allRecords {
+				updateFields := make(map[string]interface{})
+
+				if rec.LocalPath != "" {
+					trackedPaths[rec.LocalPath] = struct{}{}
+					if rec.LocalDeleted == 0 {
+						if _, exists := localMapItems[rec.LocalPath]; !exists {
+							updateFields["local_deleted"] = 1
+							fmt.Printf("[INFO] Local file deleted: %s\n", rec.LocalPath)
+						}
+					}
+				}
+
+				if rec.RemotePath != "" {
+					trackedPaths[rec.RemotePath] = struct{}{}
+					if rec.RemoteDeleted == 0 {
+						if _, exists := remoteMapItems[rec.RemotePath]; !exists {
+							updateFields["remote_deleted"] = 1
+							fmt.Printf("[INFO] Remote file deleted: %s\n", rec.RemotePath)
+						}
+					}
+				}
+
+				if len(updateFields) > 0 {
+					if updateErr := newdb.UpdateFileSync("id", rec.ID, updateFields); updateErr != nil {
+						fmt.Printf("[WARN] DB update for record %d: %v\n", rec.ID, updateErr)
+					}
+				}
+			}
+		} else {
+			// DB is empty: reset auto-increment counter and do a full fresh initialization.
+			if err = newdb.DeleteAllAndResetAutoIncrement(); err != nil {
+				fmt.Println("Error clearing cache:", err)
+				return
+			}
+		}
+
+		// Build the union of paths that are not yet tracked in the DB.
+		allPaths := make(map[string]struct{})
+		for p := range localMapItems {
+			if _, tracked := trackedPaths[p]; !tracked {
+				allPaths[p] = struct{}{}
+			}
+		}
+		for p := range remoteMapItems {
+			if _, tracked := trackedPaths[p]; !tracked {
+				allPaths[p] = struct{}{}
+			}
+		}
+
+		// Insert each untracked item into SQLite.
+		for itemPath := range allPaths {
+			localItem, hasLocal := localMapItems[itemPath]
+			remoteItem, hasRemote := remoteMapItems[itemPath]
 
 			nodeID := ""
 			isDirectory := false
@@ -407,8 +452,8 @@ func main() {
 			remoteDeleted := 0
 
 			if hasRemote {
-				remotePath = path
-				remotePathHash = localfs.PathHash(path)
+				remotePath = itemPath
+				remotePathHash = localfs.PathHash(itemPath)
 				nodeID = remoteItem.NodeId
 				isDirectory = !remoteItem.IsFile
 				remoteLastModified = strconv.FormatInt(remoteItem.ModifyTimestamp, 10)
@@ -417,21 +462,15 @@ func main() {
 				if remoteItem.DeleteTimestamp != 0 {
 					remoteDeleted = 1
 				}
-				if debug {
-					fmt.Printf("Processing remote item: %s (nodeId: %s)\n", path, nodeID)
-				}
 			}
 
 			if hasLocal {
-				localPath = path
-				localPathHash = localfs.PathHash(path)
+				localPath = itemPath
+				localPathHash = localfs.PathHash(itemPath)
 				isDirectory = !localItem.IsFile
 				localLastModified = strconv.FormatInt(localItem.ModifyTimestamp, 10)
 				localSize = int64(localItem.Size)
 				localDigest = localItem.Digest
-				if debug {
-					fmt.Printf("Processing local item: %s\n", path)
-				}
 			}
 
 			// Determine sync status based on presence and content comparison
@@ -457,13 +496,17 @@ func main() {
 				localDeleted, remoteDeleted,
 			)
 			if insertErr != nil {
-				fmt.Printf("Error inserting %s: %v\n", path, insertErr)
+				fmt.Printf("Error inserting %s: %v\n", itemPath, insertErr)
 			} else {
 				insertCount++
 			}
 		}
 
-		fmt.Printf("Cache sync initialized with %d items\n", insertCount)
+		if count > 0 {
+			fmt.Printf("Cache sync updated: deletions detected, %d new items inserted\n", insertCount)
+		} else {
+			fmt.Printf("Cache sync initialized with %d items\n", insertCount)
+		}
 	}
 
 	if *liveCacheSync {
@@ -649,6 +692,50 @@ func main() {
 				}); updateErr != nil {
 					fmt.Printf("[WARN] DB update for %s: %v\n", rec.LocalPath, updateErr)
 				}
+			}
+		}
+
+		// --- Delete local items whose remote counterpart has been deleted ---
+		remoteDeleted, err := cacheDb.QueryRemoteDeleted()
+		if err != nil {
+			fmt.Println("Error querying remote deleted:", err)
+			return
+		}
+		fmt.Printf("[INFO] Found %d remote deleted items to clean up locally\n", len(remoteDeleted))
+
+		// Process deepest paths first so child files/dirs are removed before their parents.
+		sort.Slice(remoteDeleted, func(i, j int) bool {
+			di := strings.Count(remoteDeleted[i].LocalPath, "/")
+			dj := strings.Count(remoteDeleted[j].LocalPath, "/")
+			if di != dj {
+				return di > dj
+			}
+			return remoteDeleted[i].LocalPath > remoteDeleted[j].LocalPath
+		})
+
+		for _, rec := range remoteDeleted {
+			localItemPath := filepath.Join("./files", filepath.FromSlash(rec.LocalPath))
+			var removeErr error
+			if rec.IsDirectory {
+				removeErr = os.RemoveAll(localItemPath)
+			} else {
+				removeErr = os.Remove(localItemPath)
+			}
+			if removeErr != nil {
+				if !os.IsNotExist(removeErr) {
+					fmt.Printf("[ERROR] removing local %s: %v\n", localItemPath, removeErr)
+					continue
+				}
+				// File already absent locally – still update the DB record.
+			} else {
+				fmt.Printf("[INFO] Deleted local item (remote was deleted): %s\n", localItemPath)
+			}
+			if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
+				"local_deleted": 1,
+				"sync_status":   "remote_deleted",
+				"last_synced":   now,
+			}); updateErr != nil {
+				fmt.Printf("[WARN] DB update for %s: %v\n", rec.LocalPath, updateErr)
 			}
 		}
 
