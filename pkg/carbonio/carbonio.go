@@ -2,6 +2,7 @@ package carbonio
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/sha512"
 	"crypto/tls"
 	"encoding/base64"
@@ -15,8 +16,11 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/andybalholm/brotli"
 )
 
 type Authenticator interface {
@@ -24,7 +28,7 @@ type Authenticator interface {
 	// returns the value of the ZM_AUTH_TOKEN cookie if authentication succeeds.
 	CarbonioZxAuth(email, password string) (string, error)
 	DownloadFile(token, nodeId, destPath string, fileSize int64, maxRetries int) error
-	UploadFile(token, parentId, filePath string, newVersion, overWriteVersion bool, nodeId *string) error
+	UploadFile(token, parentId, filePath string, newVersion, overWriteVersion bool, nodeId *string) (string, error)
 }
 
 type HTTPAuthenticator struct {
@@ -315,6 +319,27 @@ func (a *HTTPAuthenticator) DownloadFile(token, nodeId, destPath, fileName strin
 	return nil, lastErr
 }
 
+// decompressBody returns a ReadCloser that transparently decompresses the
+// response body according to the Content-Encoding header (br, gzip, or plain).
+// The caller is responsible for closing the returned ReadCloser.
+func decompressBody(resp *http.Response) io.ReadCloser {
+	switch strings.ToLower(resp.Header.Get("Content-Encoding")) {
+	case "br":
+		// brotli.NewReader does not return an error at creation time;
+		// any invalid-data error surfaces when reading from the returned reader.
+		return io.NopCloser(brotli.NewReader(resp.Body))
+	case "gzip":
+		gr, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			// Fall back to raw body if gzip reader cannot be created
+			return resp.Body
+		}
+		return gr
+	default:
+		return resp.Body
+	}
+}
+
 func (a *HTTPAuthenticator) UploadFile(
 	token string,
 	parentId string,
@@ -322,11 +347,11 @@ func (a *HTTPAuthenticator) UploadFile(
 	newVersion bool,
 	overWriteVersion bool,
 	nodeId *string,
-) error {
+) (string, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
 		fmt.Println("Error: %s \n", err)
-		return err
+		return "", err
 	}
 	defer file.Close()
 
@@ -347,7 +372,7 @@ func (a *HTTPAuthenticator) UploadFile(
 	req, err := http.NewRequest("POST", url, file)
 	if err != nil {
 		fmt.Println("Error: %s \n", err)
-		return err
+		return "", err
 	}
 
 	filename := ExtractFileName(filePath)
@@ -355,7 +380,7 @@ func (a *HTTPAuthenticator) UploadFile(
 	contentLength, err := GetFileContentLength(filePath)
 	if err != nil {
 		fmt.Println("Error: %s \n", err)
-		return err
+		return "", err
 	}
 
 	// Set headers
@@ -366,6 +391,7 @@ func (a *HTTPAuthenticator) UploadFile(
 	req.Header.Set("Filename", encodedFilename)
 	req.Header.Set("ParentId", parentId)
 	req.Header.Set("Content-Type", mimeType)
+	req.Header.Set("Content-Length", strconv.FormatInt(contentLength, 10))
 	req.ContentLength = contentLength
 
 	if newVersion {
@@ -401,22 +427,29 @@ func (a *HTTPAuthenticator) UploadFile(
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		fmt.Println("Error: %s \n", err)
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 
-	//body, _ := io.ReadAll(resp.Body)
-	//fmt.Println("Status:", resp.Status)
-	//fmt.Println("Response:", string(body))
-
-	// Optional: Print response status and body
-	body, _ := io.ReadAll(resp.Body)
+	bodyReader := decompressBody(resp)
+	defer bodyReader.Close()
+	body, err := io.ReadAll(bodyReader)
+	if err != nil {
+		return "", fmt.Errorf("failed to read upload response body: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		fmt.Println("Error: %s \n", string(body))
-		return fmt.Errorf("upload failed: %s", resp.Status)
+		return "", fmt.Errorf("upload failed: %s", resp.Status)
 	}
 
 	fmt.Println("Response:", string(body))
 
-	return nil
+	var uploadResp struct {
+		NodeId string `json:"nodeId"`
+	}
+	if err := json.Unmarshal(body, &uploadResp); err != nil {
+		return "", fmt.Errorf("failed to parse upload response %q: %w", string(body), err)
+	}
+
+	return uploadResp.NodeId, nil
 }

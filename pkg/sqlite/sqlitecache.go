@@ -87,6 +87,16 @@ func NewSqliteHelper(dbPath string) (*SqliteHelper, error) {
 		return nil, fmt.Errorf("errore creando la tabella filesync: %w", err)
 	}
 
+	createIndexesSQL := []string{
+		`CREATE INDEX IF NOT EXISTS idx_filesync_remote_path_dir_del ON filesync (remote_path, is_directory, deleted);`,
+		`CREATE INDEX IF NOT EXISTS idx_filesync_local_path_dir_del ON filesync (local_path, is_directory, deleted);`,
+	}
+	for _, indexSQL := range createIndexesSQL {
+		if _, err = db.Exec(indexSQL); err != nil {
+			return nil, fmt.Errorf("errore creando un indice su filesync: %w", err)
+		}
+	}
+
 	return &SqliteHelper{DB: db}, nil
 }
 
@@ -197,6 +207,27 @@ func (h *SqliteHelper) QueryBySyncStatus(status string) ([]FileSyncRecord, error
 	}
 	defer rows.Close()
 	return scanFileSyncRows(rows)
+}
+
+// QueryFolderByPath returns the first folder record whose remote_path or local_path matches
+// the given folderPath and that has a non-empty node_id. It returns nil when no such record exists.
+func (h *SqliteHelper) QueryFolderByPath(folderPath string) (*FileSyncRecord, error) {
+	rows, err := h.DB.Query(
+		selectAllColumns+` WHERE (remote_path = ? OR local_path = ?) AND is_directory = 1 AND node_id != '' AND deleted = 0 LIMIT 1`,
+		folderPath, folderPath,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	records, err := scanFileSyncRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(records) == 0 {
+		return nil, nil
+	}
+	return &records[0], nil
 }
 
 func scanFileSyncRows(rows *sql.Rows) ([]FileSyncRecord, error) {

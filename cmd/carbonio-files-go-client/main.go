@@ -260,12 +260,22 @@ func main() {
 
 	if *uploadFile != "" && *parentId != "" {
 		//parentId := "e5174e4d-7b01-4510-a56b-30075e84cd8f"
-		carbonio.UploadFile(*zmAuthToken, *parentId, *uploadFile, false, false, nodeId)
+		newNodeID, uploadErr := carbonio.UploadFile(*zmAuthToken, *parentId, *uploadFile, false, false, nodeId)
+		if uploadErr != nil {
+			fmt.Println("[ERROR]:", uploadErr)
+		} else {
+			fmt.Println("[INFO] Uploaded file, nodeId:", newNodeID)
+		}
 	}
 
 	if *uploadNewVersionFile != "" && *nodeId != "" && *parentId != "" {
 		//base_folder := "e5174e4d-7b01-4510-a56b-30075e84cd8f"
-		carbonio.UploadFile(*zmAuthToken, *parentId, *uploadNewVersionFile, true, *overwriteVersion, nodeId)
+		newNodeID, uploadErr := carbonio.UploadFile(*zmAuthToken, *parentId, *uploadNewVersionFile, true, *overwriteVersion, nodeId)
+		if uploadErr != nil {
+			fmt.Println("[ERROR]:", uploadErr)
+		} else {
+			fmt.Println("[INFO] Uploaded new version, nodeId:", newNodeID)
+		}
 	}
 
 	if *createFolder != "" && *parentId != "" {
@@ -555,7 +565,17 @@ func main() {
 				if id, ok := pathToNodeID[parentPath]; ok {
 					parentNodeID = id
 				} else {
-					fmt.Printf("[WARN] remote parent folder %s not found in cache, using LOCAL_ROOT for %s\n", parentPath, rec.LocalPath)
+					// Fall back to a direct DB lookup for an existing folder at that path
+					parentRec, dbErr := cacheDb.QueryFolderByPath(parentPath)
+					if dbErr != nil {
+						fmt.Printf("[ERROR] failed to query parent folder %s: %v\n", parentPath, dbErr)
+					}
+					if parentRec != nil && parentRec.NodeID != "" {
+						parentNodeID = parentRec.NodeID
+						pathToNodeID[parentPath] = parentRec.NodeID
+					} else {
+						fmt.Printf("[WARN] remote parent folder %s not found in cache, using LOCAL_ROOT for %s\n", parentPath, rec.LocalPath)
+					}
 				}
 			}
 			if rec.IsDirectory {
@@ -580,14 +600,15 @@ func main() {
 				}
 			} else {
 				filePath := filepath.Join("./files", filepath.FromSlash(rec.LocalPath))
-				if uploadErr := carbonio.UploadFile(*zmAuthToken, parentNodeID, filePath, false, false, nil); uploadErr != nil {
+				uploadedNodeID, uploadErr := carbonio.UploadFile(*zmAuthToken, parentNodeID, filePath, false, false, nil)
+				if uploadErr != nil {
 					fmt.Printf("[ERROR] uploading %s: %v\n", rec.LocalPath, uploadErr)
 					continue
 				}
-				fmt.Printf("[INFO] Uploaded: %s\n", rec.LocalPath)
-				// Note: the upload API does not return the new remote node_id; a subsequent
-				// initCacheSync run is needed to populate node_id for newly uploaded files.
+				fmt.Printf("[INFO] Uploaded: %s (nodeId: %s)\n", rec.LocalPath, uploadedNodeID)
+				pathToNodeID[rec.LocalPath] = uploadedNodeID
 				if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
+					"node_id":          uploadedNodeID,
 					"remote_path":      rec.LocalPath,
 					"remote_path_hash": localfs.PathHash(rec.LocalPath),
 					"remote_size":      rec.LocalSize,
