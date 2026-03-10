@@ -67,6 +67,7 @@ func recursiveListNodeItems(graphqlAuthenticator *graphql.GraphQLAuthenticator, 
 
 		if child.Type == "FOLDER" {
 			item.IsFile = false
+			item.NodeId = child.ID
 			newFolderPath := ""
 			if folderPath == "" {
 				newFolderPath = child.Name
@@ -329,6 +330,11 @@ func main() {
 
 	if *initCacheSync {
 
+		debug := false
+		if debug {
+			fmt.Println("Debug mode enabled: verbose output of processing steps")
+		}
+
 		// Initialize SQLite database
 		newdb, err := sqlitecache.NewSqliteHelper("./file_sync_cache.db")
 		if err != nil {
@@ -336,7 +342,12 @@ func main() {
 			return
 		}
 		defer newdb.Close()
-		fmt.Println("Sqlite cache initialized successfully:", newdb.DB)
+
+		if debug {
+			fmt.Printf("SQLite cache initialized at %s\n", newdb.DB)
+		} else {
+			fmt.Println("SQLite cache initialized successfully")
+		}
 
 		// Clear existing data and reset auto-increment
 		err = newdb.DeleteAllAndResetAutoIncrement()
@@ -403,6 +414,9 @@ func main() {
 				remoteSize = int64(remoteItem.Size)
 				remoteDigest = remoteItem.Digest
 				deleted = remoteItem.DeleteTimestamp != 0
+				if debug {
+					fmt.Printf("Processing remote item: %s (nodeId: %s)\n", path, nodeID)
+				}
 			}
 
 			if hasLocal {
@@ -412,6 +426,9 @@ func main() {
 				localLastModified = strconv.FormatInt(localItem.ModifyTimestamp, 10)
 				localSize = int64(localItem.Size)
 				localDigest = localItem.Digest
+				if debug {
+					fmt.Printf("Processing local item: %s\n", path)
+				}
 			}
 
 			// Determine sync status based on presence and content comparison
@@ -560,10 +577,13 @@ func main() {
 				continue
 			}
 			parentPath := path.Dir(rec.LocalPath)
+			//print parentPath
+			fmt.Printf("[DEBUG] Processing %s, parent path: %s\n", rec.LocalPath, parentPath)
 			parentNodeID := "LOCAL_ROOT"
 			if parentPath != "." {
 				if id, ok := pathToNodeID[parentPath]; ok {
 					parentNodeID = id
+					fmt.Printf("[DEBUG] Found parent node ID in cache for %s: %s\n", parentPath, parentNodeID)
 				} else {
 					// Fall back to a direct DB lookup for an existing folder at that path
 					parentRec, dbErr := cacheDb.QueryFolderByPath(parentPath)
@@ -573,6 +593,14 @@ func main() {
 					if parentRec != nil && parentRec.NodeID != "" {
 						parentNodeID = parentRec.NodeID
 						pathToNodeID[parentPath] = parentRec.NodeID
+						fmt.Printf("[DEBUG] Found parent node ID in DB for %s: %s\n", parentPath, parentNodeID)
+						if parentRec.RemotePath != parentPath {
+							fmt.Printf("[WARN] remote path mismatch for parent folder %s: cache has %s\n", parentPath, parentRec.RemotePath)
+						}
+						if parentRec.Deleted {
+							fmt.Printf("[WARN] parent folder %s is marked deleted in cache, using LOCAL_ROOT as parent for %s\n", parentPath, rec.LocalPath)
+							parentNodeID = "LOCAL_ROOT"
+						}
 					} else {
 						fmt.Printf("[WARN] remote parent folder %s not found in cache, using LOCAL_ROOT for %s\n", parentPath, rec.LocalPath)
 					}
