@@ -211,6 +211,24 @@ func (h *SqliteHelper) QueryBySyncStatus(status string) ([]FileSyncRecord, error
 	return scanFileSyncRows(rows)
 }
 
+// CountRecords returns the total number of records in the filesync table.
+func (h *SqliteHelper) CountRecords() (int, error) {
+	var count int
+	err := h.DB.QueryRow("SELECT COUNT(*) FROM filesync").Scan(&count)
+	return count, err
+}
+
+// QueryRemoteDeleted returns all records where the remote side has been deleted
+// but the local copy still exists (remote_deleted=1, local_deleted=0, local_path != '').
+func (h *SqliteHelper) QueryRemoteDeleted() ([]FileSyncRecord, error) {
+	rows, err := h.DB.Query(selectAllColumns + ` WHERE remote_deleted = 1 AND local_deleted = 0 AND local_path != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanFileSyncRows(rows)
+}
+
 // QueryFolderByPath returns the first folder record whose remote_path or local_path matches
 // the given folderPath and that has a non-empty node_id. It returns nil when no such record exists.
 func (h *SqliteHelper) QueryFolderByPath(folderPath string) (*FileSyncRecord, error) {
