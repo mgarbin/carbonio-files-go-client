@@ -30,7 +30,8 @@ type FileSyncRecord struct {
 	LocalDigest        string
 	SyncStatus         string
 	LastSynced         string
-	Deleted            bool
+	LocalDeleted       int
+	RemoteDeleted      int
 }
 
 // NewSqliteHelper crea/apre il database e assicura che la tabella filesync esista.
@@ -80,7 +81,8 @@ func NewSqliteHelper(dbPath string) (*SqliteHelper, error) {
 		local_digest TEXT,
 		sync_status TEXT,
 		last_synced TEXT,
-		deleted BOOLEAN NOT NULL DEFAULT 0
+		local_deleted INTEGER NOT NULL DEFAULT 0,
+		remote_deleted INTEGER NOT NULL DEFAULT 0
 	);`
 	_, err = db.Exec(createTableSQL)
 	if err != nil {
@@ -88,8 +90,8 @@ func NewSqliteHelper(dbPath string) (*SqliteHelper, error) {
 	}
 
 	createIndexesSQL := []string{
-		`CREATE INDEX IF NOT EXISTS idx_filesync_remote_path_dir_del ON filesync (remote_path, is_directory, deleted);`,
-		`CREATE INDEX IF NOT EXISTS idx_filesync_local_path_dir_del ON filesync (local_path, is_directory, deleted);`,
+		`CREATE INDEX IF NOT EXISTS idx_filesync_remote_path_dir_del ON filesync (remote_path, is_directory, remote_deleted);`,
+		`CREATE INDEX IF NOT EXISTS idx_filesync_local_path_dir_del ON filesync (local_path, is_directory, local_deleted);`,
 	}
 	for _, indexSQL := range createIndexesSQL {
 		if _, err = db.Exec(indexSQL); err != nil {
@@ -107,16 +109,16 @@ func (h *SqliteHelper) InsertFileSync(
 	remoteLastModified, localLastModified string,
 	remoteSize, localSize int64,
 	remoteDigest, localDigest, syncStatus, lastSynced string,
-	deleted bool,
+	localDeleted, remoteDeleted int,
 ) (int64, error) {
 	stmt := `
         INSERT INTO filesync (
             node_id, parent_id, remote_path, remote_path_hash, local_path, local_path_hash, is_directory, remote_last_modified, local_last_modified,
-            remote_size, local_size, remote_digest, local_digest, sync_status, last_synced, deleted
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            remote_size, local_size, remote_digest, local_digest, sync_status, last_synced, local_deleted, remote_deleted
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	res, err := h.DB.Exec(stmt,
 		nodeID, parentID, remotePath, remotePathHash, localPath, localPathHash, isDirectory, remoteLastModified, localLastModified,
-		remoteSize, localSize, remoteDigest, localDigest, syncStatus, lastSynced, deleted)
+		remoteSize, localSize, remoteDigest, localDigest, syncStatus, lastSynced, localDeleted, remoteDeleted)
 	if err != nil {
 		return 0, err
 	}
@@ -187,7 +189,7 @@ func (h *SqliteHelper) Close() error {
 
 const selectAllColumns = `SELECT id, node_id, parent_id, remote_path, remote_path_hash, local_path, local_path_hash,
 	is_directory, remote_last_modified, local_last_modified, remote_size, local_size,
-	remote_digest, local_digest, sync_status, last_synced, deleted FROM filesync`
+	remote_digest, local_digest, sync_status, last_synced, local_deleted, remote_deleted FROM filesync`
 
 // QueryAll returns all records from the filesync table.
 func (h *SqliteHelper) QueryAll() ([]FileSyncRecord, error) {
@@ -213,7 +215,7 @@ func (h *SqliteHelper) QueryBySyncStatus(status string) ([]FileSyncRecord, error
 // the given folderPath and that has a non-empty node_id. It returns nil when no such record exists.
 func (h *SqliteHelper) QueryFolderByPath(folderPath string) (*FileSyncRecord, error) {
 	rows, err := h.DB.Query(
-		selectAllColumns+` WHERE (remote_path = ? OR local_path = ?) AND is_directory = 1 AND node_id != '' AND deleted = 0 LIMIT 1`,
+		selectAllColumns+` WHERE (remote_path = ? OR local_path = ?) AND is_directory = 1 AND node_id != '' AND local_deleted = 0 AND remote_deleted = 0 LIMIT 1`,
 		folderPath, folderPath,
 	)
 	if err != nil {
@@ -234,7 +236,7 @@ func scanFileSyncRows(rows *sql.Rows) ([]FileSyncRecord, error) {
 	var records []FileSyncRecord
 	for rows.Next() {
 		var rec FileSyncRecord
-		var isDirInt, deletedInt int
+		var isDirInt int
 		err := rows.Scan(
 			&rec.ID, &rec.NodeID, &rec.ParentID,
 			&rec.RemotePath, &rec.RemotePathHash,
@@ -244,13 +246,12 @@ func scanFileSyncRows(rows *sql.Rows) ([]FileSyncRecord, error) {
 			&rec.RemoteSize, &rec.LocalSize,
 			&rec.RemoteDigest, &rec.LocalDigest,
 			&rec.SyncStatus, &rec.LastSynced,
-			&deletedInt,
+			&rec.LocalDeleted, &rec.RemoteDeleted,
 		)
 		if err != nil {
 			return nil, err
 		}
 		rec.IsDirectory = isDirInt != 0
-		rec.Deleted = deletedInt != 0
 		records = append(records, rec)
 	}
 	return records, rows.Err()
