@@ -229,6 +229,17 @@ func (h *SqliteHelper) QueryRemoteDeleted() ([]FileSyncRecord, error) {
 	return scanFileSyncRows(rows)
 }
 
+// QueryLocalDeleted returns all records where the local side has been deleted
+// but the remote copy still exists (local_deleted=1, remote_deleted=0, node_id != '', remote_path != '').
+func (h *SqliteHelper) QueryLocalDeleted() ([]FileSyncRecord, error) {
+	rows, err := h.DB.Query(selectAllColumns + ` WHERE local_deleted = 1 AND remote_deleted = 0 AND node_id != '' AND remote_path != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanFileSyncRows(rows)
+}
+
 // QueryFolderByPath returns the first folder record whose remote_path or local_path matches
 // the given folderPath and that has a non-empty node_id. It returns nil when no such record exists.
 func (h *SqliteHelper) QueryFolderByPath(folderPath string) (*FileSyncRecord, error) {
