@@ -27,7 +27,7 @@ Create a `config.yaml` file in the directory where you run the client:
 
 ```yaml
 Main:
-  server: "mail.example.com"    # Carbonio server hostname or IP
+  endpoint: "mail.example.com"    # Carbonio server hostname or IP
   username: "myuser"            # Carbonio account username
   password: "mypassword"        # Carbonio account password
 #  AuthToken: "ZM_AUTH_TOKEN"  # Optional: pre-computed auth token (skips login)
@@ -126,12 +126,12 @@ Compare the local `./files/` directory with the remote storage and report differ
 
 Differences reported include: missing paths, digest mismatches, size differences, and timestamp differences.
 
-### Initialize the sync cache
+### Update the sync cache
 
-Populate the SQLite cache database (`./file_sync_cache.db`) with the current state of both local and remote files. Run this before the first `-liveCacheSync`:
+Populate the SQLite cache database (`./file_sync_cache.db`) with the current state of both local and remote files. Run this before any `-liveCacheSync`:
 
 ```bash
-./carbonio-files-client -initCacheSync
+./carbonio-files-client -updateCacheSync
 ```
 
 ### Bidirectional sync with cache
@@ -164,7 +164,7 @@ The cache database is updated after each operation.
 | `-deleteNodes` | bool | Permanently delete nodes specified by `-nodesIdList` |
 | `-trashNodes` | bool | Move nodes to trash |
 | `-liveSyncCheck` | bool | Compare local and remote without making changes |
-| `-initCacheSync` | bool | Initialize the SQLite sync cache |
+| `-updateCacheSync` | bool | Update the SQLite sync cache (run before any `-liveSyncCheck`)|
 | `-liveCacheSync` | bool | Perform bidirectional sync using the cache |
 | `-parentId` | string | Parent folder node ID (used with upload/create operations) |
 | `-nodeId` | string | Node ID (used with `-uploadNewVersionFile`) |

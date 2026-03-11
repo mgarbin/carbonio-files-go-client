@@ -203,7 +203,8 @@ func recursiveFileDownloader(graphqlAuthenticator *graphql.GraphQLAuthenticator,
 func main() {
 	cfg, err := LoadConfig("config.yaml")
 	if err != nil {
-		panic(err)
+		fmt.Printf("Error loading config: %v\n", err)
+		return
 	}
 
 	var zmAuthToken *string
@@ -211,18 +212,32 @@ func main() {
 
 	carbonio := &carbonio.HTTPAuthenticator{Endpoint: cfg.Main.Endpoint}
 
+	// Read local filesystem items
+	localFolder := "./files"
+
+	// if folder doesn't exist, create it and initialize empty cache
+	if _, err := os.Stat(localFolder); os.IsNotExist(err) {
+		if err := os.MkdirAll(localFolder, 0755); err != nil {
+			fmt.Println("Error creating local folder:", err)
+			return
+		}
+		fmt.Println("Local folder created:", localFolder)
+	}
+
 	if zmAuthToken == nil {
 
 		carbonioToken, errCarbonioToken := carbonio.CarbonioZxAuth(cfg.Main.Username, cfg.Main.Password)
 
 		if errCarbonioToken != nil {
-			panic(errCarbonioToken)
+			fmt.Printf("Error obtaining Carbonio token: %v\n", errCarbonioToken)
+			return
 		}
 
 		if carbonioToken != nil {
 			zmAuthToken = carbonioToken
 		} else {
-			panic("Invalid ZM_AUTH_TOKEN")
+			fmt.Println("Failed to obtain Carbonio token and no authToken provided in config")
+			return
 		}
 	}
 
@@ -237,7 +252,7 @@ func main() {
 	parentId := flag.String("parentId", "", "Use this flag to specify ParentId")
 	liveSyncCheck := flag.Bool("liveSyncCheck", false, "Use this flag to check differences between local folder and remote folder")
 	cacheSync := flag.Bool("cacheSync", false, "Use this flag to enable sqlite cache for liveSyncCheck")
-	initCacheSync := flag.Bool("initCacheSync", false, "Use this flag to initialize sqlite cache for liveSyncCheck and update file records with local and remote info")
+	updateCacheSync := flag.Bool("updateCacheSync", false, "Use this flag to initialize sqlite cache for liveSyncCheck and update file records with local and remote info")
 	liveCacheSync := flag.Bool("liveCacheSync", false, "Use this flag to sync local and remote files using the sqlite cache db")
 	moveNodes := flag.Bool("moveNodes", false, "Use this flag to move nodes to a new destination")
 	deleteNodes := flag.Bool("deleteNodes", false, "Use this flag to delete nodes")
@@ -345,8 +360,6 @@ func main() {
 			fmt.Println("Cache sync not yet implemented")
 		}
 
-		localFolder := "./files"
-
 		localMapItems, err := localfs.ReadFolderRecursive(localFolder)
 		if err != nil {
 			fmt.Println("Error:", err)
@@ -378,7 +391,7 @@ func main() {
 
 	}
 
-	if *initCacheSync {
+	if *updateCacheSync {
 
 		// Initialize SQLite database
 		newdb, err := sqlitecache.NewSqliteHelper("./file_sync_cache.db")
@@ -389,8 +402,6 @@ func main() {
 		defer newdb.Close()
 		fmt.Println("SQLite cache initialized successfully")
 
-		// Read local filesystem items
-		localFolder := "./files"
 		localMapItems, err := localfs.ReadFolderRecursive(localFolder)
 		if err != nil {
 			fmt.Println("Error reading local folder:", err)
@@ -605,7 +616,7 @@ func main() {
 				continue
 			}
 			if rec.IsDirectory {
-				localDirPath := filepath.Join("./files", filepath.FromSlash(rec.RemotePath))
+				localDirPath := filepath.Join(localFolder, filepath.FromSlash(rec.RemotePath))
 				if err := os.MkdirAll(localDirPath, 0755); err != nil {
 					fmt.Printf("[ERROR] creating local dir %s: %v\n", localDirPath, err)
 					continue
@@ -622,9 +633,9 @@ func main() {
 			} else {
 				dirPart := path.Dir(rec.RemotePath)
 				fileName := path.Base(rec.RemotePath)
-				destPath := "./files"
+				destPath := localFolder
 				if dirPart != "." {
-					destPath = filepath.Join("./files", filepath.FromSlash(dirPart))
+					destPath = filepath.Join(localFolder, filepath.FromSlash(dirPart))
 				}
 				if err := os.MkdirAll(destPath, 0755); err != nil {
 					fmt.Printf("[ERROR] creating local dir %s: %v\n", destPath, err)
@@ -723,7 +734,7 @@ func main() {
 					}
 				}
 			} else {
-				filePath := filepath.Join("./files", filepath.FromSlash(rec.LocalPath))
+				filePath := filepath.Join(localFolder, filepath.FromSlash(rec.LocalPath))
 				uploadedNodeID, uploadErr := carbonio.UploadFile(*zmAuthToken, parentNodeID, filePath, false, false, nil)
 				if uploadErr != nil {
 					fmt.Printf("[ERROR] uploading %s: %v\n", rec.LocalPath, uploadErr)
@@ -764,7 +775,7 @@ func main() {
 		})
 
 		for _, rec := range remoteDeleted {
-			localItemPath := filepath.Join("./files", filepath.FromSlash(rec.LocalPath))
+			localItemPath := filepath.Join(localFolder, filepath.FromSlash(rec.LocalPath))
 			var removeErr error
 			if rec.IsDirectory {
 				removeErr = os.RemoveAll(localItemPath)

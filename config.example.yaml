@@ -1,0 +1,5 @@
+Main:
+  endpoint: "mail.example.com"
+  username: "myemail"
+  password: "mypassword"
+#  authToken: ""
