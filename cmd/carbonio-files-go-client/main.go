@@ -789,6 +789,40 @@ func main() {
 			}
 		}
 
+		// --- Trash remote items whose local counterpart has been deleted ---
+		localDeleted, err := cacheDb.QueryLocalDeleted()
+		if err != nil {
+			fmt.Println("Error querying local deleted:", err)
+			return
+		}
+		fmt.Printf("[INFO] Found %d locally deleted items to remove from remote\n", len(localDeleted))
+
+		// Process deepest paths first so child files/dirs are removed before their parents.
+		sort.Slice(localDeleted, func(i, j int) bool {
+			di := strings.Count(localDeleted[i].RemotePath, "/")
+			dj := strings.Count(localDeleted[j].RemotePath, "/")
+			if di != dj {
+				return di > dj
+			}
+			return localDeleted[i].RemotePath > localDeleted[j].RemotePath
+		})
+
+		for _, rec := range localDeleted {
+			_, trashErr := graphqlAuthenticator.TrashNodes([]string{rec.NodeID})
+			if trashErr != nil {
+				fmt.Printf("[ERROR] trashing remote %s (nodeId: %s): %v\n", rec.RemotePath, rec.NodeID, trashErr)
+				continue
+			}
+			fmt.Printf("[INFO] Trashed remote item (local was deleted): %s\n", rec.RemotePath)
+			if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
+				"remote_deleted": 1,
+				"sync_status":    "local_deleted",
+				"last_synced":    now,
+			}); updateErr != nil {
+				fmt.Printf("[WARN] DB update for %s: %v\n", rec.RemotePath, updateErr)
+			}
+		}
+
 		fmt.Println("[INFO] liveCacheSync completed.")
 	}
 
