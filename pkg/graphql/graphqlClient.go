@@ -166,6 +166,13 @@ func (c *Client) GetChildren(
 	return _data, err
 }
 
+// CreateFolder executes the createFolder GraphQL mutation.
+// Variables:
+// - parentId: the id of the parent folder where the new folder will be created
+// - folderName: the name of the new folder
+// - sharesLimit: optional limit for shares to return in the response
+//
+// The response is unmarshaled into the provided resp pointer, which should be of type *CreateFolderResponse.
 func (c *Client) CreateFolder(
 	ctx context.Context,
 	parentId string,
@@ -272,6 +279,94 @@ func (c *Client) CreateFolder(
 	}
 
 	_data = &CreateFolderResponse{}
+	req := &graphql.Request{Query: query, Variables: vars}
+	resp := &graphql.Response{Data: _data}
+	err = c.client.MakeRequest(ctx, req, resp)
+
+	return _data, err
+}
+
+// TrashNodes executes the trashNodes GraphQL mutation.
+// Variables:
+// - nodesId: list of node ids to move to trash
+//
+// The response is unmarshaled into the provided resp pointer, which should be of type *TrashNodesResponse.
+func (c *Client) TrashNodes(
+	ctx context.Context,
+	nodesId []string,
+) (_data *TrashNodesResponse, err error) {
+	const query = `
+	mutation trashNodes($node_ids: [ID!]) {
+		trashNodes(node_ids: $node_ids)
+	}
+	`
+
+	vars := map[string]interface{}{
+		"node_ids": nodesId,
+	}
+
+	_data = &TrashNodesResponse{}
+	req := &graphql.Request{Query: query, Variables: vars}
+	resp := &graphql.Response{Data: _data}
+	err = c.client.MakeRequest(ctx, req, resp)
+
+	return _data, err
+}
+
+// DeleteNodes executes the deleteNodes GraphQL mutation.
+// Variables:
+// - nodesId: list of node ids to delete permanently
+//
+// The response is unmarshaled into the provided resp pointer, which should be of type *DeleteNodesResponse.
+func (c *Client) DeleteNodes(
+	ctx context.Context,
+	nodesId []string,
+) (_data *DeleteNodesResponse, err error) {
+
+	const query = `
+	mutation deleteNodes($node_ids: [ID!]) {
+		deleteNodes(node_ids: $node_ids)
+	}
+	`
+
+	vars := map[string]interface{}{
+		"node_ids": nodesId,
+	}
+
+	_data = &DeleteNodesResponse{}
+	req := &graphql.Request{Query: query, Variables: vars}
+	resp := &graphql.Response{Data: _data}
+	err = c.client.MakeRequest(ctx, req, resp)
+
+	return _data, err
+}
+
+func (c *Client) MoveNodes(
+	ctx context.Context,
+	nodesId []string,
+	destinationId string,
+) (_data *MoveNodesResponse, err error) {
+
+	// {"operationName":"moveNodes","variables":{"node_ids":["b39bf0c4-2c11-4f98-821f-d628c0937e2a"],"destination_id":"7f289005-b5ed-4b0e-8d71-49e443489b9c"},"query":"mutation moveNodes($node_ids: [ID!], $destination_id: ID!) {\n  moveNodes(node_ids: $node_ids, destination_id: $destination_id) {\n    id\n    parent {\n      id\n      __typename\n    }\n    __typename\n  }\n}"}
+	const query = `
+	mutation moveNodes($node_ids: [ID!], $destination_id: ID!) {
+		moveNodes(node_ids: $node_ids, destination_id: $destination_id) {
+			id
+			parent {
+				id
+				__typename
+			}
+			__typename
+		}
+	}
+	`
+
+	vars := map[string]interface{}{
+		"node_ids":       nodesId,
+		"destination_id": destinationId,
+	}
+
+	_data = &MoveNodesResponse{}
 	req := &graphql.Request{Query: query, Variables: vars}
 	resp := &graphql.Response{Data: _data}
 	err = c.client.MakeRequest(ctx, req, resp)

@@ -128,3 +128,100 @@ func (a *GraphQLAuthenticator) CreateFolder(parentId string, folderName string) 
 
 	return resp.CreateFolder, nil
 }
+
+func (a *GraphQLAuthenticator) MoveNodes(nodeIds []string, targetParentId string) ([]string, error) {
+	// Optionally, set up an authenticated HTTP client
+	httpClient := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &customTransport{
+			base:            http.DefaultTransport,
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			authToken:       a.AuthToken,
+		},
+	}
+
+	client := NewClient("https://"+a.Endpoint+"/services/files/graphql", httpClient)
+
+	// Execute the query
+	resp, err := client.MoveNodes(
+		context.Background(),
+		nodeIds,
+		targetParentId,
+	)
+
+	if err != nil {
+		log.Fatalf("GraphQL query failed: %v", err)
+		return nil, err
+	}
+
+	var movedNodes []string
+	for _, moveNode := range resp.MoveNodes {
+		movedNodes = append(movedNodes, moveNode.ID)
+	}
+
+	return movedNodes, nil
+}
+
+func (a *GraphQLAuthenticator) TrashNodes(nodeIds []string) ([]string, error) {
+	// Optionally, set up an authenticated HTTP client
+	httpClient := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &customTransport{
+			base:            http.DefaultTransport,
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			authToken:       a.AuthToken,
+		},
+	}
+
+	client := NewClient("https://"+a.Endpoint+"/services/files/graphql", httpClient)
+
+	// Execute the query
+	resp, err := client.TrashNodes(
+		context.Background(),
+		nodeIds,
+	)
+
+	if err != nil {
+		log.Fatalf("GraphQL query failed: %v", err)
+		return nil, err
+	}
+
+	var trashedNodes []string
+	for _, trashNode := range resp.TrashNodes {
+		trashedNodes = append(trashedNodes, trashNode)
+	}
+
+	return trashedNodes, nil
+}
+
+func (a *GraphQLAuthenticator) DeleteNodes(nodeIds []string) ([]string, error) {
+	// Optionally, set up an authenticated HTTP client
+	httpClient := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &customTransport{
+			base:            http.DefaultTransport,
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			authToken:       a.AuthToken,
+		},
+	}
+
+	client := NewClient("https://"+a.Endpoint+"/services/files/graphql", httpClient)
+
+	// Execute the query
+	resp, err := client.DeleteNodes(
+		context.Background(),
+		nodeIds,
+	)
+
+	if err != nil {
+		log.Fatalf("GraphQL query failed: %v", err)
+		return nil, err
+	}
+
+	var deletedNodes []string
+	for _, deleteNode := range resp.DeleteNodes {
+		deletedNodes = append(deletedNodes, deleteNode)
+	}
+
+	return deletedNodes, nil
+}

@@ -239,6 +239,11 @@ func main() {
 	cacheSync := flag.Bool("cacheSync", false, "Use this flag to enable sqlite cache for liveSyncCheck")
 	initCacheSync := flag.Bool("initCacheSync", false, "Use this flag to initialize sqlite cache for liveSyncCheck and update file records with local and remote info")
 	liveCacheSync := flag.Bool("liveCacheSync", false, "Use this flag to sync local and remote files using the sqlite cache db")
+	moveNodes := flag.Bool("moveNodes", false, "Use this flag to move nodes to a new destination")
+	deleteNodes := flag.Bool("deleteNodes", false, "Use this flag to delete nodes")
+	destinationId := flag.String("destinationId", "", "Use this flag to specify the destination folder id for moveNodes")
+	nodesIdList := flag.String("nodesIdList", "", "Use this flag to specify a comma-separated list of node ids for moveNodes or deleteNodes")
+	trashNodes := flag.Bool("trashNodes", false, "Use this flag to move nodes to trash instead of deleting permanently")
 
 	flag.Parse()
 
@@ -287,6 +292,51 @@ func main() {
 		} else {
 			fmt.Println("[INFO] New folder id ", newFolder.ID)
 		}
+	}
+
+	if *moveNodes {
+		if *destinationId == "" || *nodesIdList == "" {
+			fmt.Println("Error: destinationId and nodesIdList must be provided for moveNodes")
+			return
+		}
+		graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: cfg.Main.Endpoint, AuthToken: *zmAuthToken}
+		nodeIDs := strings.Split(*nodesIdList, ",")
+		moveResp, err := graphqlAuthenticator.MoveNodes(nodeIDs, *destinationId)
+		if err != nil {
+			fmt.Printf("[ERROR] moving nodes: %v\n", err)
+			return
+		}
+		fmt.Printf("[INFO] Moved nodes to destination %s: %v\n", *destinationId, moveResp)
+	}
+
+	if *trashNodes {
+		if *nodesIdList == "" {
+			fmt.Println("Error: nodesIdList must be provided for trashNodes")
+			return
+		}
+		graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: cfg.Main.Endpoint, AuthToken: *zmAuthToken}
+		nodeIDs := strings.Split(*nodesIdList, ",")
+		trashResp, err := graphqlAuthenticator.TrashNodes(nodeIDs)
+		if err != nil {
+			fmt.Printf("[ERROR] trashing nodes: %v\n", err)
+			return
+		}
+		fmt.Printf("[INFO] Trashed nodes: %v\n", trashResp)
+	}
+
+	if *deleteNodes {
+		if *nodesIdList == "" {
+			fmt.Println("Error: nodesIdList must be provided for deleteNodes")
+			return
+		}
+		graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: cfg.Main.Endpoint, AuthToken: *zmAuthToken}
+		nodeIDs := strings.Split(*nodesIdList, ",")
+		deleteResp, err := graphqlAuthenticator.DeleteNodes(nodeIDs)
+		if err != nil {
+			fmt.Printf("[ERROR] deleting nodes: %v\n", err)
+			return
+		}
+		fmt.Printf("[INFO] Deleted nodes: %v\n", deleteResp)
 	}
 
 	if *liveSyncCheck {
