@@ -465,6 +465,69 @@ func main() {
 					}
 				}
 
+				// Update remote fields when the remote node exists and its content has changed.
+				hasContentUpdate := false
+				if rec.RemotePath != "" && rec.RemoteDeleted == 0 {
+					if remoteItem, exists := remoteMapItems[rec.RemotePath]; exists {
+						newRemoteSize := int64(remoteItem.Size)
+						newRemoteDigest := remoteItem.Digest
+						newRemoteLastModified := strconv.FormatInt(remoteItem.ModifyTimestamp, 10)
+						if newRemoteSize != rec.RemoteSize || newRemoteDigest != rec.RemoteDigest || newRemoteLastModified != rec.RemoteLastModified {
+							updateFields["remote_size"] = newRemoteSize
+							updateFields["remote_digest"] = newRemoteDigest
+							updateFields["remote_last_modified"] = newRemoteLastModified
+							hasContentUpdate = true
+							fmt.Printf("[INFO] Remote node updated: %s\n", rec.RemotePath)
+						}
+					}
+				}
+
+				// Update local fields when the local item exists and its content has changed.
+				if rec.LocalPath != "" && rec.LocalDeleted == 0 {
+					if localItem, exists := localMapItems[rec.LocalPath]; exists {
+						newLocalSize := int64(localItem.Size)
+						newLocalDigest := localItem.Digest
+						newLocalLastModified := strconv.FormatInt(localItem.ModifyTimestamp, 10)
+						if newLocalSize != rec.LocalSize || newLocalDigest != rec.LocalDigest || newLocalLastModified != rec.LocalLastModified {
+							updateFields["local_size"] = newLocalSize
+							updateFields["local_digest"] = newLocalDigest
+							updateFields["local_last_modified"] = newLocalLastModified
+							hasContentUpdate = true
+							fmt.Printf("[INFO] Local item updated: %s\n", rec.LocalPath)
+						}
+					}
+				}
+
+				// Recalculate sync_status when content fields changed and both sides are present
+				// and non-deleted. This keeps the sync_status accurate after remote or local updates.
+				_, localBeingDeleted := updateFields["local_deleted"]
+				_, remoteBeingDeleted := updateFields["remote_deleted"]
+				if hasContentUpdate && rec.RemotePath != "" && rec.LocalPath != "" &&
+					!localBeingDeleted && !remoteBeingDeleted &&
+					rec.LocalDeleted == 0 && rec.RemoteDeleted == 0 {
+					finalRemoteDigest := rec.RemoteDigest
+					if v, ok := updateFields["remote_digest"]; ok {
+						finalRemoteDigest = v.(string)
+					}
+					finalRemoteSize := rec.RemoteSize
+					if v, ok := updateFields["remote_size"]; ok {
+						finalRemoteSize = v.(int64)
+					}
+					finalLocalDigest := rec.LocalDigest
+					if v, ok := updateFields["local_digest"]; ok {
+						finalLocalDigest = v.(string)
+					}
+					finalLocalSize := rec.LocalSize
+					if v, ok := updateFields["local_size"]; ok {
+						finalLocalSize = v.(int64)
+					}
+					if finalRemoteDigest == finalLocalDigest && finalRemoteSize == finalLocalSize {
+						updateFields["sync_status"] = "synced"
+					} else {
+						updateFields["sync_status"] = "out_of_sync"
+					}
+				}
+
 				if len(updateFields) > 0 {
 					if updateErr := newdb.UpdateFileSync("id", rec.ID, updateFields); updateErr != nil {
 						fmt.Printf("[WARN] DB update for record %d: %v\n", rec.ID, updateErr)
