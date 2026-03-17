@@ -146,6 +146,19 @@ func createLocalFolder(path string) error {
 	return nil
 }
 
+func epochToTime(ts int64) time.Time {
+	if ts > 1_000_000_000_000_000_000 {
+		return time.Unix(0, ts)
+	}
+	if ts > 1_000_000_000_000_000 {
+		return time.UnixMicro(ts)
+	}
+	if ts > 1_000_000_000_000 {
+		return time.UnixMilli(ts)
+	}
+	return time.Unix(ts, 0)
+}
+
 func recursiveFileDownloader(graphqlAuthenticator *graphql.GraphQLAuthenticator, carbonio *carbonio.HTTPAuthenticator, id, folderPath string) {
 	nodes, nodesErr := graphqlAuthenticator.GetAllNode(id, "NAME_ASC", nil, nil)
 	if nodesErr != nil {
@@ -876,8 +889,13 @@ func main() {
 				continue
 			}
 
-			if remoteTs >= localTs {
+			//convert remoteTs and localTs to time.Time for better readability in logs
+			remoteTime := epochToTime(remoteTs)
+			localTime := epochToTime(localTs)
+
+			if remoteTime.Equal(localTime) || remoteTime.After(localTime) {
 				// Remote is more recent (or timestamps are equal): download the remote version.
+				fmt.Printf("[INFO] Remote version is more recent for %s; downloading update\n", rec.RemotePath)
 				dirPart := path.Dir(rec.RemotePath)
 				fileName := path.Base(rec.RemotePath)
 				destPath := localFolder
@@ -901,18 +919,19 @@ func main() {
 					fmt.Printf("[INFO] %s - %s\n", *exitStat, rec.RemotePath)
 				}
 				if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
-					"local_path":           rec.RemotePath,
-					"local_path_hash":      localfs.PathHash(rec.RemotePath),
-					"local_size":           rec.RemoteSize,
-					"local_digest":         rec.RemoteDigest,
-					"local_last_modified":  rec.RemoteLastModified,
-					"sync_status":          "synced",
-					"last_synced":          now,
+					"local_path":          rec.RemotePath,
+					"local_path_hash":     localfs.PathHash(rec.RemotePath),
+					"local_size":          rec.RemoteSize,
+					"local_digest":        rec.RemoteDigest,
+					"local_last_modified": rec.RemoteLastModified,
+					"sync_status":         "synced",
+					"last_synced":         now,
 				}); updateErr != nil {
 					fmt.Printf("[WARN] DB update for %s: %v\n", rec.RemotePath, updateErr)
 				}
 			} else {
 				// Local is more recent: upload a new version to remote.
+				fmt.Printf("[INFO] Local version is more recent for %s; uploading update\n", rec.LocalPath)
 				parentPath := path.Dir(rec.LocalPath)
 				parentNodeID := "LOCAL_ROOT"
 				if parentPath != "." {
