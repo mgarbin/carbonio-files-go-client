@@ -819,6 +819,136 @@ func main() {
 			}
 		}
 
+		// --- Resolve out_of_sync items ---
+		outOfSync, err := cacheDb.QueryBySyncStatus("out_of_sync")
+		if err != nil {
+			fmt.Println("Error querying out_of_sync:", err)
+			return
+		}
+		fmt.Printf("[INFO] Found %d out_of_sync items to process\n", len(outOfSync))
+
+		for _, rec := range outOfSync {
+			if rec.LocalDeleted != 0 || rec.RemoteDeleted != 0 {
+				continue
+			}
+			if rec.IsDirectory {
+				// Directories have no file content; mark them synced.
+				if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
+					"sync_status": "synced",
+					"last_synced": now,
+				}); updateErr != nil {
+					fmt.Printf("[WARN] DB update for %s: %v\n", rec.RemotePath, updateErr)
+				}
+				continue
+			}
+
+			// Parse timestamps so we can decide which side is more recent.
+			var remoteTs, localTs int64
+			if rec.RemoteLastModified != "" {
+				var parseErr error
+				remoteTs, parseErr = strconv.ParseInt(rec.RemoteLastModified, 10, 64)
+				if parseErr != nil {
+					fmt.Printf("[WARN] could not parse remote_last_modified for %s: %v\n", rec.RemotePath, parseErr)
+				}
+			}
+			if rec.LocalLastModified != "" {
+				var parseErr error
+				localTs, parseErr = strconv.ParseInt(rec.LocalLastModified, 10, 64)
+				if parseErr != nil {
+					fmt.Printf("[WARN] could not parse local_last_modified for %s: %v\n", rec.LocalPath, parseErr)
+				}
+			}
+
+			// Verify that content actually differs before acting.
+			// Use digest comparison when both sides have a digest, otherwise fall back to size.
+			contentDiffers := rec.RemoteSize != rec.LocalSize
+			if rec.RemoteDigest != "" && rec.LocalDigest != "" {
+				contentDiffers = rec.RemoteDigest != rec.LocalDigest
+			}
+			if !contentDiffers {
+				// Content is identical despite the out_of_sync status; just update the flag.
+				if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
+					"sync_status": "synced",
+					"last_synced": now,
+				}); updateErr != nil {
+					fmt.Printf("[WARN] DB update for %s: %v\n", rec.RemotePath, updateErr)
+				}
+				continue
+			}
+
+			if remoteTs >= localTs {
+				// Remote is more recent (or timestamps are equal): download the remote version.
+				dirPart := path.Dir(rec.RemotePath)
+				fileName := path.Base(rec.RemotePath)
+				destPath := localFolder
+				if dirPart != "." {
+					destPath = filepath.Join(localFolder, filepath.FromSlash(dirPart))
+				}
+				if err := os.MkdirAll(destPath, 0755); err != nil {
+					fmt.Printf("[ERROR] creating local dir %s: %v\n", destPath, err)
+					continue
+				}
+				var wg sync.WaitGroup
+				sem := make(chan struct{}, 1)
+				wg.Add(1)
+				sem <- struct{}{}
+				exitStat, downErr := carbonio.DownloadFile(*zmAuthToken, rec.NodeID, destPath, fileName, rec.RemoteSize, maxRetries, &wg, sem)
+				wg.Wait()
+				if downErr != nil {
+					fmt.Printf("[ERROR] downloading updated file %s: %v\n", rec.RemotePath, downErr)
+					continue
+				} else if exitStat != nil {
+					fmt.Printf("[INFO] %s - %s\n", *exitStat, rec.RemotePath)
+				}
+				if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
+					"local_path":           rec.RemotePath,
+					"local_path_hash":      localfs.PathHash(rec.RemotePath),
+					"local_size":           rec.RemoteSize,
+					"local_digest":         rec.RemoteDigest,
+					"local_last_modified":  rec.RemoteLastModified,
+					"sync_status":          "synced",
+					"last_synced":          now,
+				}); updateErr != nil {
+					fmt.Printf("[WARN] DB update for %s: %v\n", rec.RemotePath, updateErr)
+				}
+			} else {
+				// Local is more recent: upload a new version to remote.
+				parentPath := path.Dir(rec.LocalPath)
+				parentNodeID := "LOCAL_ROOT"
+				if parentPath != "." {
+					if id, ok := pathToNodeID[parentPath]; ok {
+						parentNodeID = id
+					} else {
+						parentRec, dbErr := cacheDb.QueryFolderByPath(parentPath)
+						if dbErr != nil {
+							fmt.Printf("[ERROR] failed to query parent folder %s: %v\n", parentPath, dbErr)
+						}
+						if parentRec != nil && parentRec.NodeID != "" {
+							parentNodeID = parentRec.NodeID
+							pathToNodeID[parentPath] = parentRec.NodeID
+						}
+					}
+				}
+				filePath := filepath.Join(localFolder, filepath.FromSlash(rec.LocalPath))
+				nodeIDStr := rec.NodeID
+				uploadedNodeID, uploadErr := carbonio.UploadFile(*zmAuthToken, parentNodeID, filePath, true, false, &nodeIDStr)
+				if uploadErr != nil {
+					fmt.Printf("[ERROR] uploading new version %s: %v\n", rec.LocalPath, uploadErr)
+					continue
+				}
+				fmt.Printf("[INFO] Uploaded new version: %s (nodeId: %s)\n", rec.LocalPath, uploadedNodeID)
+				if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
+					"remote_size":          rec.LocalSize,
+					"remote_digest":        rec.LocalDigest,
+					"remote_last_modified": rec.LocalLastModified,
+					"sync_status":          "synced",
+					"last_synced":          now,
+				}); updateErr != nil {
+					fmt.Printf("[WARN] DB update for %s: %v\n", rec.LocalPath, updateErr)
+				}
+			}
+		}
+
 		// --- Delete local items whose remote counterpart has been deleted ---
 		remoteDeleted, err := cacheDb.QueryRemoteDeleted()
 		if err != nil {
