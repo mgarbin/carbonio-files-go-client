@@ -373,7 +373,7 @@ func main() {
 			fmt.Println("Cache sync not yet implemented")
 		}
 
-		localMapItems, err := localfs.ReadFolderRecursive(localFolder)
+		localMapItems, err := localfs.ReadFolderRecursive(localFolder, false)
 		if err != nil {
 			fmt.Println("Error:", err)
 			return
@@ -415,7 +415,7 @@ func main() {
 		defer newdb.Close()
 		fmt.Println("SQLite cache initialized successfully")
 
-		localMapItems, err := localfs.ReadFolderRecursive(localFolder)
+		localMapItems, err := localfs.ReadFolderRecursive(localFolder, false)
 		if err != nil {
 			fmt.Println("Error reading local folder:", err)
 			return

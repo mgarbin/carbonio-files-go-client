@@ -60,7 +60,7 @@ func Sha384Base64(filePath string) (string, error) {
 	return encoded, nil
 }
 
-func ReadFolderRecursive(root string) (map[string]ItemInfo, error) {
+func ReadFolderRecursive(root string, showHidden bool) (map[string]ItemInfo, error) {
 	items := make(map[string]ItemInfo)
 
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -73,6 +73,13 @@ func ReadFolderRecursive(root string) (map[string]ItemInfo, error) {
 			return err
 		}
 		if relPath == "." {
+			return nil
+		}
+
+		if !showHidden && strings.HasPrefix(d.Name(), ".") {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 
