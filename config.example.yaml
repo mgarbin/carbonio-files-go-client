@@ -3,3 +3,4 @@ Main:
   username: "myemail"
   password: "mypassword"
 #  authToken: ""
+#  filesLocalFolder: "./files"

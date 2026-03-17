@@ -25,10 +25,11 @@ type Config struct {
 }
 
 type MainConfig struct {
-	Endpoint  string  `yaml:"endpoint"`
-	Username  string  `yaml:"username"`
-	Password  string  `yaml:"password"`
-	AuthToken *string `yaml:"authToken"`
+	Endpoint    string  `yaml:"endpoint"`
+	Username    string  `yaml:"username"`
+	Password    string  `yaml:"password"`
+	AuthToken   *string `yaml:"authToken"`
+	FilesFolder string  `yaml:"filesLocalFolder"`
 }
 
 func LoadConfig(filename string) (*Config, error) {
@@ -227,6 +228,10 @@ func main() {
 
 	// Read local filesystem items
 	localFolder := "./files"
+
+	if cfg.Main.FilesFolder != "" {
+		localFolder = cfg.Main.FilesFolder
+	}
 
 	// if folder doesn't exist, create it and initialize empty cache
 	if _, err := os.Stat(localFolder); os.IsNotExist(err) {

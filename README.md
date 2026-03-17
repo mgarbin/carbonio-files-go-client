@@ -27,10 +27,11 @@ Create a `config.yaml` file in the directory where you run the client:
 
 ```yaml
 Main:
-  endpoint: "mail.example.com"    # Carbonio server hostname or IP
-  username: "myuser"            # Carbonio account username
-  password: "mypassword"        # Carbonio account password
-#  AuthToken: "ZM_AUTH_TOKEN"  # Optional: pre-computed auth token (skips login)
+  endpoint: "mail.example.com"   # Carbonio server hostname or IP
+  username: "myuser"             # Carbonio account username
+  password: "mypassword"         # Carbonio account password
+#  AuthToken: "ZM_AUTH_TOKEN"    # Optional: pre-computed auth token (skips login)
+#  filesLocalFolder: "./files"   # Optional: by default it create the folder "files" where you are running carbonio-files-go-client
 ```
 
 When `AuthToken` is provided, the username/password login step is skipped and the token is used directly.
