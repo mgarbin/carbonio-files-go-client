@@ -142,12 +142,15 @@ Perform a smart bidirectional sync using the cache:
 ./carbonio-files-client -liveCacheSync
 ```
 
-The sync proceeds in four phases:
+The sync proceeds in phases:
 
 1. **Download** — fetches items that exist only on the remote to `./files/`.
 2. **Upload** — uploads items that exist only locally to the remote.
 3. **Clean local** — removes local items that were deleted on the remote.
 4. **Trash remote** — trashes remote items that were deleted locally.
+5. **Update out_of_sync** — find all out_of_sync items then compare remote and local, finally upload or download new version.
+
+out_of_sync function use compare algorithm with **digest / file size / modify timestamp**.
 
 The cache database is updated after each operation.
 
