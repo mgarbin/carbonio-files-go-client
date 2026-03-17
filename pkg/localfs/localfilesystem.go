@@ -76,7 +76,13 @@ func ReadFolderRecursive(root string, showHidden bool) (map[string]ItemInfo, err
 			return nil
 		}
 
-		if !showHidden && strings.HasPrefix(d.Name(), ".") {
+		// Skip hidden files/directories if showHidden is false
+		// A file or directory is considered hidden if its name starts with a dot ('.').
+		// If it's a directory, we skip the entire directory by returning filepath.SkipDir.
+		// This logic ensures that hidden files and directories are not included in the results when showHidden is false.
+		// Note: this check is done on the directory entry name (d.Name()) rather than the full path, to correctly identify hidden items regardless of their depth in the directory structure.
+		// On windows, the temp file have a different prefix (~)
+		if !showHidden && (strings.HasPrefix(d.Name(), ".") || strings.HasPrefix(d.Name(), "~")) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
