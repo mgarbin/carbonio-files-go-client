@@ -1,15 +1,101 @@
+// Command carbonio-files-go-client is both the desktop GUI and the
+// command-line client for carbonio-files-go-client.
+//
+//   - Run with no arguments: opens the desktop GUI (Wails).
+//   - Run with -cli: unlocks every CLI flag documented in the README
+//     (-getAllNode, -uploadFile, -liveCacheSync, ...).
+//
+// Any other combination (flags without -cli) is rejected: CLI flags are
+// only available once -cli is explicitly passed.
 package main
 
 import (
+	"embed"
+	"flag"
+	"fmt"
+	"io/fs"
+	"os"
+
 	"carbonio-files-go-client/pkg/actions"
 	"carbonio-files-go-client/pkg/carbonio"
 	"carbonio-files-go-client/pkg/config"
-	"flag"
-	"fmt"
-	"os"
+
+	"github.com/wailsapp/wails/v2"
+	"github.com/wailsapp/wails/v2/pkg/options"
+	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 )
 
+//go:embed all:frontend/dist
+var assets embed.FS
+
 func main() {
+	cliMode, rest := splitCLIFlag(os.Args[1:])
+
+	if cliMode {
+		// Rewrite os.Args so the CLI's own flag.Parse() (in runCLI) never
+		// sees -cli.
+		os.Args = append([]string{os.Args[0]}, rest...)
+		runCLI()
+		return
+	}
+
+	if len(rest) > 0 {
+		fmt.Fprintln(os.Stderr, "Unknown arguments:", rest)
+		fmt.Fprintln(os.Stderr, "Pass -cli to use the command-line interface, or run with no arguments to open the desktop app.")
+		os.Exit(1)
+	}
+
+	runGUI()
+}
+
+// splitCLIFlag reports whether -cli/--cli is present in args and returns the
+// remaining arguments with it removed.
+func splitCLIFlag(args []string) (cliMode bool, rest []string) {
+	rest = make([]string, 0, len(args))
+	for _, a := range args {
+		if a == "-cli" || a == "--cli" {
+			cliMode = true
+			continue
+		}
+		rest = append(rest, a)
+	}
+	return cliMode, rest
+}
+
+// runGUI starts the Wails desktop application.
+func runGUI() {
+	frontendFS, err := fs.Sub(assets, "frontend/dist")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error preparing GUI assets:", err)
+		os.Exit(1)
+	}
+
+	app := NewApp()
+
+	err = wails.Run(&options.App{
+		Title:            "Carbonio Files Client",
+		Width:            1024,
+		Height:           720,
+		MinWidth:         860,
+		MinHeight:        600,
+		BackgroundColour: options.NewRGB(255, 255, 255),
+		AssetServer: &assetserver.Options{
+			Assets: frontendFS,
+		},
+		OnStartup: app.startup,
+		Bind: []interface{}{
+			app,
+		},
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error starting GUI:", err)
+		os.Exit(1)
+	}
+}
+
+// runCLI is the original command-line entry point: it holds every flag
+// documented in the README, gated behind the top-level -cli flag.
+func runCLI() {
 	cfg, err := config.LoadConfig("config.yaml")
 	if err != nil {
 		fmt.Printf("Error loading config: %v\n", err)
@@ -134,5 +220,4 @@ func main() {
 			return
 		}
 	}
-
 }

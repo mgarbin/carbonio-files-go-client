@@ -7,7 +7,6 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -29,6 +28,55 @@ type Authenticator interface {
 	CarbonioZxAuth(email, password string) (string, error)
 	DownloadFile(token, nodeId, destPath string, fileSize int64, maxRetries int) error
 	UploadFile(token, parentId, filePath string, newVersion, overWriteVersion bool, nodeId *string) (string, error)
+}
+
+// AuthErrorKind classifies the outcome of a failed CarbonioZxAuth call so
+// callers (in particular the GUI) can react without parsing message
+// strings. The classification only distinguishes what the /zx/auth/v2/login
+// endpoint actually exposes over HTTP: PasswordAuthManager/LdapProvisioning
+// wrap every authentication failure (bad password, locked/inactive/
+// maintenance-mode account, ...) into a generic AuthenticationError that the
+// server maps to a bare 401 with no body, so those cases are indistinguishable
+// on the wire and all surface as AuthErrorInvalidCredentials.
+type AuthErrorKind string
+
+const (
+	// AuthErrorInvalidInput means the email/password never left the client
+	// (e.g. malformed email address).
+	AuthErrorInvalidInput AuthErrorKind = "invalid_input"
+	// AuthErrorInvalidCredentials covers every 401 the login endpoint can
+	// return: wrong password, locked/inactive account, maintenance mode.
+	AuthErrorInvalidCredentials AuthErrorKind = "invalid_credentials"
+	// AuthErrorMustChangePassword is the one login failure the server does
+	// single out: a 3xx redirect to the change-password page
+	// (loginErrorCode=account.CHANGE_PASSWORD).
+	AuthErrorMustChangePassword AuthErrorKind = "must_change_password"
+	// AuthErrorForbidden is a 403 (e.g. IP/domain not authorized).
+	AuthErrorForbidden AuthErrorKind = "forbidden"
+	// AuthErrorBadRequest is a 400 (malformed login payload).
+	AuthErrorBadRequest AuthErrorKind = "bad_request"
+	// AuthErrorServer is any 5xx from the server.
+	AuthErrorServer AuthErrorKind = "server_error"
+	// AuthErrorNetwork means the request never got a response (DNS, refused
+	// connection, TLS failure, timeout, ...).
+	AuthErrorNetwork AuthErrorKind = "network"
+	// AuthErrorUnknown is anything not covered above (unexpected status
+	// code, missing cookie on an otherwise-200 response, ...).
+	AuthErrorUnknown AuthErrorKind = "unknown"
+)
+
+// AuthError is the error type returned by CarbonioZxAuth on failure.
+type AuthError struct {
+	Kind       AuthErrorKind
+	StatusCode int
+	Detail     string
+}
+
+func (e *AuthError) Error() string {
+	if e.StatusCode != 0 {
+		return fmt.Sprintf("carbonio auth error [%s]: %s (HTTP %d)", e.Kind, e.Detail, e.StatusCode)
+	}
+	return fmt.Sprintf("carbonio auth error [%s]: %s", e.Kind, e.Detail)
 }
 
 type HTTPAuthenticator struct {
@@ -158,7 +206,7 @@ func GetFileContentLength(filePath string) (int64, error) {
 func (a *HTTPAuthenticator) CarbonioZxAuth(email, password string) (*string, error) {
 	// Verify if email respect rfc
 	if !isValidEmail(email) {
-		return nil, errors.New("invalid email address format")
+		return nil, &AuthError{Kind: AuthErrorInvalidInput, Detail: "invalid email address format"}
 	}
 
 	// Create payload to inject to zx auth endpoint
@@ -170,40 +218,63 @@ func (a *HTTPAuthenticator) CarbonioZxAuth(email, password string) (*string, err
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, err
+		return nil, &AuthError{Kind: AuthErrorUnknown, Detail: err.Error()}
 	}
 
 	// Make the request
 	req, err := http.NewRequest("POST", "https://"+a.Endpoint+"/zx/auth/v2/login", bytes.NewBuffer(body))
 	if err != nil {
-		return nil, err
+		return nil, &AuthError{Kind: AuthErrorUnknown, Detail: err.Error()}
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	// Create HTTP client with SSL verification disabled
+	// Create HTTP client with SSL verification disabled. Redirects are not
+	// followed: a 3xx response to the login itself is how the server signals
+	// "password must be changed", and following it would hide that behind a
+	// generic "cookie not found" error.
 	client := &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
 		Timeout: 5 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
 
 	// Wait for response
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, &AuthError{Kind: AuthErrorNetwork, Detail: err.Error()}
 	}
-
 	defer resp.Body.Close()
 
-	// Read cookies
-	for _, cookie := range resp.Cookies() {
-		if cookie.Name == "ZM_AUTH_TOKEN" {
-			return &cookie.Value, nil
+	switch {
+	case resp.StatusCode == http.StatusOK:
+		for _, cookie := range resp.Cookies() {
+			if cookie.Name == "ZM_AUTH_TOKEN" {
+				token := cookie.Value
+				return &token, nil
+			}
 		}
+		return nil, &AuthError{Kind: AuthErrorUnknown, StatusCode: resp.StatusCode, Detail: "ZM_AUTH_TOKEN cookie not found"}
+	case resp.StatusCode >= 300 && resp.StatusCode < 400:
+		location := resp.Header.Get("Location")
+		if strings.Contains(location, "loginErrorCode=account.CHANGE_PASSWORD") {
+			return nil, &AuthError{Kind: AuthErrorMustChangePassword, StatusCode: resp.StatusCode, Detail: "password must be changed"}
+		}
+		return nil, &AuthError{Kind: AuthErrorUnknown, StatusCode: resp.StatusCode, Detail: "unexpected redirect: " + location}
+	case resp.StatusCode == http.StatusUnauthorized:
+		return nil, &AuthError{Kind: AuthErrorInvalidCredentials, StatusCode: resp.StatusCode, Detail: "invalid username or password"}
+	case resp.StatusCode == http.StatusForbidden:
+		return nil, &AuthError{Kind: AuthErrorForbidden, StatusCode: resp.StatusCode, Detail: "access forbidden"}
+	case resp.StatusCode == http.StatusBadRequest:
+		return nil, &AuthError{Kind: AuthErrorBadRequest, StatusCode: resp.StatusCode, Detail: "bad request"}
+	case resp.StatusCode >= 500:
+		return nil, &AuthError{Kind: AuthErrorServer, StatusCode: resp.StatusCode, Detail: "server error"}
+	default:
+		return nil, &AuthError{Kind: AuthErrorUnknown, StatusCode: resp.StatusCode, Detail: fmt.Sprintf("unexpected status %d", resp.StatusCode)}
 	}
-
-	return nil, errors.New("ZM_AUTH_TOKEN cookie not found")
 }
 
 func (a *HTTPAuthenticator) DownloadFile(token, nodeId, destPath, fileName string, fileSize int64, maxRetries int, wg *sync.WaitGroup, sem chan struct{}) (*string, error) {
@@ -315,7 +386,7 @@ func (a *HTTPAuthenticator) DownloadFile(token, nodeId, destPath, fileName strin
 		return &exitStatus, nil
 	}
 
-	fmt.Println("Error creating file: %s \n", lastErr)
+	fmt.Printf("Error creating file: %s\n", lastErr)
 	return nil, lastErr
 }
 
@@ -350,7 +421,7 @@ func (a *HTTPAuthenticator) UploadFile(
 ) (string, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
-		fmt.Println("Error: %s \n", err)
+		fmt.Printf("Error: %s\n", err)
 		return "", err
 	}
 	defer file.Close()
@@ -371,7 +442,7 @@ func (a *HTTPAuthenticator) UploadFile(
 	url := "https://" + a.Endpoint + "/services/files/" + uploadEndpoint
 	req, err := http.NewRequest("POST", url, file)
 	if err != nil {
-		fmt.Println("Error: %s \n", err)
+		fmt.Printf("Error: %s\n", err)
 		return "", err
 	}
 
@@ -379,7 +450,7 @@ func (a *HTTPAuthenticator) UploadFile(
 
 	contentLength, err := GetFileContentLength(filePath)
 	if err != nil {
-		fmt.Println("Error: %s \n", err)
+		fmt.Printf("Error: %s\n", err)
 		return "", err
 	}
 
@@ -426,7 +497,7 @@ func (a *HTTPAuthenticator) UploadFile(
 	// Perform request
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		fmt.Println("Error: %s \n", err)
+		fmt.Printf("Error: %s\n", err)
 		return "", err
 	}
 	defer resp.Body.Close()
@@ -438,7 +509,7 @@ func (a *HTTPAuthenticator) UploadFile(
 		return "", fmt.Errorf("failed to read upload response body: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		fmt.Println("Error: %s \n", string(body))
+		fmt.Printf("Error: %s\n", string(body))
 		return "", fmt.Errorf("upload failed: %s", resp.Status)
 	}
 

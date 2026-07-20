@@ -1,0 +1,17 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "carbonio-files-client",
+  "outputfilename": "carbonio-files-client",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "frontend:dev:build": "",
+  "frontend:dev:install": "",
+  "frontend:dir": "frontend",
+  "wailsjsdir": "frontend",
+  "build:tags": "webkit2_41",
+  "author": {
+    "name": "Zextras",
+    "email": ""
+  }
+}
