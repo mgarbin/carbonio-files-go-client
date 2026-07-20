@@ -200,7 +200,8 @@ carbonio-files-go-client/
 │   ├── localfs/
 │   │   └── localfilesystem.go   # Local file system operations
 │   └── sqlite/
-│       └── sqlitecache.go       # SQLite sync cache
+│       ├── sqlitecache.go       # SQLite sync cache
+│       └── sqliteconfig.go      # Encrypted-at-rest configuration table (CRUD)
 ├── files_watcher.go             # File system watcher utility
 ├── Makefile
 ├── go.mod
@@ -218,6 +219,34 @@ carbonio-files-go-client/
 | [gopkg.in/yaml.v3](https://pkg.go.dev/gopkg.in/yaml.v3) | YAML configuration parsing |
 | [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite) | Pure-Go SQLite driver |
 
+## Configuration storage (SQLite)
+
+In addition to `config.yaml`, the same `Main` configuration can be persisted in
+the SQLite database managed by `pkg/sqlite` (`sqlitecache.SqliteHelper`), in a
+singleton `config` table (`id` is always `1`). `Password` and `AuthToken` are
+encrypted at rest with AES-256-GCM before being written; every other field
+(`endpoint`, `username`, `files_local_folder`) is stored as plain text.
+
+The AES-256 key is generated on first use and stored next to the database as
+`<dbPath>.key` with `0600` permissions, kept separate from the `.db` file so a
+copy of the database alone cannot be decrypted.
+
+```go
+h, err := sqlitecache.NewSqliteHelper("./file_sync_cache.db")
+
+err = h.CreateConfig(sqlitecache.ConfigRecord{
+    Endpoint:  "mail.example.com",
+    Username:  "myemail",
+    Password:  "mypassword",
+    AuthToken: "", // optional
+})
+
+cfg, err := h.GetConfig()      // nil, nil if none was saved yet
+err = h.UpdateConfig(cfg2)     // ErrConfigNotFound if none exists
+err = h.UpsertConfig(cfg3)     // create or update
+err = h.DeleteConfig()         // ErrConfigNotFound if none exists
+```
+
 ## Testing
 
 ```bash
@@ -231,3 +260,4 @@ make test
 - File integrity is verified using SHA-384 digests.
 - The SQLite cache file (`./file_sync_cache.db`) is created automatically in the current directory when using cache-based sync operations.
 - The local download/sync directory (`./files/`) is created automatically when needed.
+- The configuration table's AES-256 key (`<dbPath>.key`, e.g. `./file_sync_cache.db.key`) holds the material needed to decrypt stored credentials; treat it like a secret and never commit it (both `*.db` and `*.db.key` are gitignored).

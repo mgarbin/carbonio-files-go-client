@@ -10,6 +10,9 @@ import (
 
 type SqliteHelper struct {
 	DB *sql.DB
+	// configKey is the AES-256 key used to encrypt/decrypt sensitive
+	// configuration fields (password, authToken) stored in the config table.
+	configKey []byte
 }
 
 // FileSyncRecord represents a row in the filesync table.
@@ -99,7 +102,19 @@ func NewSqliteHelper(dbPath string) (*SqliteHelper, error) {
 		}
 	}
 
-	return &SqliteHelper{DB: db}, nil
+	// Ensure the config table exists and load/generate the key used to
+	// encrypt the sensitive configuration fields.
+	if err := ensureConfigTable(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	configKey, err := loadOrCreateConfigKey(dbPath)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+
+	return &SqliteHelper{DB: db, configKey: configKey}, nil
 }
 
 // InsertFileSync inserisce un nuovo record nella tabella filesync.

@@ -1,3 +1,5 @@
 /carbonio-files-client
 /config.yaml
 /files
+*.db
+*.db.key
