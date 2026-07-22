@@ -3,6 +3,7 @@ package sqlitecache
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -33,6 +34,10 @@ func TestConfigCRUD(t *testing.T) {
 		Password:         "mypassword",
 		AuthToken:        authToken,
 		FilesLocalFolder: "./files",
+		LogLevel:         "debug",
+		LogFormat:        "json",
+		LogOutput:        "both",
+		LogPath:          "/tmp/carbonio-test.log",
 	}
 	if err := h.CreateConfig(in); err != nil {
 		t.Fatalf("CreateConfig() error = %v", err)
@@ -50,7 +55,8 @@ func TestConfigCRUD(t *testing.T) {
 	if got == nil {
 		t.Fatal("GetConfig() = nil, want a record")
 	}
-	if got.Endpoint != in.Endpoint || got.Username != in.Username || got.Password != in.Password || got.AuthToken != in.AuthToken || got.FilesLocalFolder != in.FilesLocalFolder {
+	if got.Endpoint != in.Endpoint || got.Username != in.Username || got.Password != in.Password || got.AuthToken != in.AuthToken || got.FilesLocalFolder != in.FilesLocalFolder ||
+		got.LogLevel != in.LogLevel || got.LogFormat != in.LogFormat || got.LogOutput != in.LogOutput || got.LogPath != in.LogPath {
 		t.Fatalf("GetConfig() = %+v, want fields matching %+v", got, in)
 	}
 	if got.CreatedAt == "" || got.UpdatedAt == "" {
@@ -64,6 +70,10 @@ func TestConfigCRUD(t *testing.T) {
 		Password:         "newpassword",
 		AuthToken:        "",
 		FilesLocalFolder: "./other-files",
+		LogLevel:         "warn",
+		LogFormat:        "console",
+		LogOutput:        "file",
+		LogPath:          "/tmp/carbonio-other.log",
 	}
 	if err := h.UpdateConfig(updated); err != nil {
 		t.Fatalf("UpdateConfig() error = %v", err)
@@ -72,7 +82,8 @@ func TestConfigCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetConfig() after update error = %v", err)
 	}
-	if got.Endpoint != updated.Endpoint || got.Password != updated.Password || got.AuthToken != "" {
+	if got.Endpoint != updated.Endpoint || got.Password != updated.Password || got.AuthToken != "" ||
+		got.LogLevel != updated.LogLevel || got.LogFormat != updated.LogFormat || got.LogOutput != updated.LogOutput || got.LogPath != updated.LogPath {
 		t.Fatalf("GetConfig() after update = %+v, want fields matching %+v", got, updated)
 	}
 
@@ -178,5 +189,84 @@ func TestConfigKeyPersistsAcrossReopen(t *testing.T) {
 	}
 	if got == nil || got.Password != cfg.Password || got.AuthToken != cfg.AuthToken {
 		t.Fatalf("GetConfig() after reopen = %+v, want matching secrets", got)
+	}
+}
+
+// TestConfigTableMigrationAddsLoggingColumns verifies that opening a
+// database created before the log_* columns existed transparently adds
+// them (via addColumnIfMissing) without touching the pre-existing row, and
+// that the new columns are then fully usable.
+func TestConfigTableMigrationAddsLoggingColumns(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "legacy.db")
+
+	// Create a fully-migrated database first (so the config key file and a
+	// properly encrypted row exist), then drop the log_* columns to
+	// simulate a database created before they existed.
+	h0, err := NewSqliteHelper(dbPath)
+	if err != nil {
+		t.Fatalf("NewSqliteHelper() error = %v", err)
+	}
+	legacyCfg := ConfigRecord{
+		Endpoint:         "legacy.example.com",
+		Username:         "legacyuser",
+		Password:         "legacy-password",
+		FilesLocalFolder: "./files",
+	}
+	if err := h0.CreateConfig(legacyCfg); err != nil {
+		t.Fatalf("CreateConfig() error = %v", err)
+	}
+	for _, col := range []string{"log_level", "log_format", "log_output", "log_path"} {
+		if _, err := h0.DB.Exec(fmt.Sprintf("ALTER TABLE config DROP COLUMN %s", col)); err != nil {
+			t.Fatalf("dropping column %s to simulate legacy schema failed: %v", col, err)
+		}
+	}
+	if err := h0.Close(); err != nil {
+		t.Fatalf("h0.Close() error = %v", err)
+	}
+
+	// Opening it again through SqliteHelper must migrate the table in place.
+	h, err := NewSqliteHelper(dbPath)
+	if err != nil {
+		t.Fatalf("NewSqliteHelper() on legacy db error = %v", err)
+	}
+	defer h.Close()
+
+	var logLevel, logFormat, logOutput, logPath string
+	row := h.DB.QueryRow(`SELECT log_level, log_format, log_output, log_path FROM config WHERE id = 1`)
+	if err := row.Scan(&logLevel, &logFormat, &logOutput, &logPath); err != nil {
+		t.Fatalf("querying migrated logging columns failed: %v", err)
+	}
+	if logLevel != "" || logFormat != "" || logOutput != "" || logPath != "" {
+		t.Fatalf("migrated logging columns = (%q, %q, %q, %q), want all empty", logLevel, logFormat, logOutput, logPath)
+	}
+
+	// The pre-existing row must have survived the migration untouched.
+	got, err := h.GetConfig()
+	if err != nil {
+		t.Fatalf("GetConfig() after migration error = %v", err)
+	}
+	if got == nil || got.Endpoint != legacyCfg.Endpoint || got.Username != legacyCfg.Username || got.Password != legacyCfg.Password {
+		t.Fatalf("GetConfig() after migration = %+v, want legacy row preserved", got)
+	}
+
+	// The newly-added logging columns must be fully usable going forward.
+	got.LogLevel = "debug"
+	got.LogFormat = "json"
+	got.LogOutput = "both"
+	got.LogPath = "/tmp/carbonio.log"
+	if err := h.UpdateConfig(*got); err != nil {
+		t.Fatalf("UpdateConfig() after migration error = %v", err)
+	}
+	got2, err := h.GetConfig()
+	if err != nil {
+		t.Fatalf("GetConfig() after logging update error = %v", err)
+	}
+	if got2.LogLevel != "debug" || got2.LogFormat != "json" || got2.LogOutput != "both" || got2.LogPath != "/tmp/carbonio.log" {
+		t.Fatalf("GetConfig() after logging update = %+v, want logging fields set", got2)
+	}
+
+	// Re-running the migration on an already-migrated table must be a no-op.
+	if err := ensureConfigTable(h.DB); err != nil {
+		t.Fatalf("re-running ensureConfigTable() error = %v", err)
 	}
 }

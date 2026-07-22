@@ -26,8 +26,16 @@ type ConfigRecord struct {
 	Password         string
 	AuthToken        string // "" means "not set" (NULL in the db)
 	FilesLocalFolder string
-	CreatedAt        string
-	UpdatedAt        string
+	// LogLevel, LogFormat, LogOutput and LogPath mirror pkg/logger.Config
+	// (see pkg/config.LoggingConfig for the accepted values). They carry no
+	// secret material and are stored as plain text. Empty means "use the
+	// built-in default" (logger.Default()).
+	LogLevel  string
+	LogFormat string
+	LogOutput string
+	LogPath   string
+	CreatedAt string
+	UpdatedAt string
 }
 
 var (
@@ -49,11 +57,54 @@ func ensureConfigTable(db *sql.DB) error {
 		password_enc BLOB NOT NULL,
 		auth_token_enc BLOB,
 		files_local_folder TEXT NOT NULL DEFAULT '',
+		log_level TEXT NOT NULL DEFAULT '',
+		log_format TEXT NOT NULL DEFAULT '',
+		log_output TEXT NOT NULL DEFAULT '',
+		log_path TEXT NOT NULL DEFAULT '',
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL
 	);`
 	if _, err := db.Exec(createTableSQL); err != nil {
 		return fmt.Errorf("error creating the config table: %w", err)
+	}
+
+	// Migrate databases created before the logging columns existed.
+	for _, col := range []string{"log_level", "log_format", "log_output", "log_path"} {
+		if err := addColumnIfMissing(db, "config", col, "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// addColumnIfMissing adds column to table with the given DDL (type +
+// constraints) unless it already exists. SQLite's ALTER TABLE has no
+// portable "ADD COLUMN IF NOT EXISTS", so existence is checked via
+// PRAGMA table_info first.
+func addColumnIfMissing(db *sql.DB, table, column, ddl string) error {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return fmt.Errorf("error inspecting table %s: %w", table, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, colType string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			return fmt.Errorf("error reading table_info(%s): %w", table, err)
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error reading table_info(%s): %w", table, err)
+	}
+
+	if _, err := db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, ddl)); err != nil {
+		return fmt.Errorf("error adding column %s to %s: %w", column, table, err)
 	}
 	return nil
 }
@@ -152,9 +203,9 @@ func (h *SqliteHelper) CreateConfig(cfg ConfigRecord) error {
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err = h.DB.Exec(
-		`INSERT INTO config (id, endpoint, username, password_enc, auth_token_enc, files_local_folder, created_at, updated_at)
-		 VALUES (1, ?, ?, ?, ?, ?, ?, ?)`,
-		cfg.Endpoint, cfg.Username, passwordEnc, authTokenEnc, cfg.FilesLocalFolder, now, now,
+		`INSERT INTO config (id, endpoint, username, password_enc, auth_token_enc, files_local_folder, log_level, log_format, log_output, log_path, created_at, updated_at)
+		 VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		cfg.Endpoint, cfg.Username, passwordEnc, authTokenEnc, cfg.FilesLocalFolder, cfg.LogLevel, cfg.LogFormat, cfg.LogOutput, cfg.LogPath, now, now,
 	)
 	if err != nil {
 		if isConstraintErr(err) {
@@ -169,13 +220,13 @@ func (h *SqliteHelper) CreateConfig(cfg ConfigRecord) error {
 // authToken. Returns (nil, nil) if no configuration has been saved yet.
 func (h *SqliteHelper) GetConfig() (*ConfigRecord, error) {
 	row := h.DB.QueryRow(
-		`SELECT endpoint, username, password_enc, auth_token_enc, files_local_folder, created_at, updated_at
+		`SELECT endpoint, username, password_enc, auth_token_enc, files_local_folder, log_level, log_format, log_output, log_path, created_at, updated_at
 		 FROM config WHERE id = 1`,
 	)
 
 	var cfg ConfigRecord
 	var passwordEnc, authTokenEnc []byte
-	err := row.Scan(&cfg.Endpoint, &cfg.Username, &passwordEnc, &authTokenEnc, &cfg.FilesLocalFolder, &cfg.CreatedAt, &cfg.UpdatedAt)
+	err := row.Scan(&cfg.Endpoint, &cfg.Username, &passwordEnc, &authTokenEnc, &cfg.FilesLocalFolder, &cfg.LogLevel, &cfg.LogFormat, &cfg.LogOutput, &cfg.LogPath, &cfg.CreatedAt, &cfg.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -206,9 +257,9 @@ func (h *SqliteHelper) UpdateConfig(cfg ConfigRecord) error {
 	}
 
 	res, err := h.DB.Exec(
-		`UPDATE config SET endpoint = ?, username = ?, password_enc = ?, auth_token_enc = ?, files_local_folder = ?, updated_at = ?
+		`UPDATE config SET endpoint = ?, username = ?, password_enc = ?, auth_token_enc = ?, files_local_folder = ?, log_level = ?, log_format = ?, log_output = ?, log_path = ?, updated_at = ?
 		 WHERE id = 1`,
-		cfg.Endpoint, cfg.Username, passwordEnc, authTokenEnc, cfg.FilesLocalFolder, time.Now().UTC().Format(time.RFC3339),
+		cfg.Endpoint, cfg.Username, passwordEnc, authTokenEnc, cfg.FilesLocalFolder, cfg.LogLevel, cfg.LogFormat, cfg.LogOutput, cfg.LogPath, time.Now().UTC().Format(time.RFC3339),
 	)
 	if err != nil {
 		return fmt.Errorf("error updating configuration: %w", err)

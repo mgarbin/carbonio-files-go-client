@@ -4,12 +4,12 @@ import (
 	"carbonio-files-go-client/pkg/carbonio"
 	"carbonio-files-go-client/pkg/graphql"
 	"carbonio-files-go-client/pkg/localfs"
-	"fmt"
 	"maps"
 	"os"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // RecursiveListNodeItems walks the remote node tree starting at id and returns
@@ -68,34 +68,25 @@ func RecursiveListNodeItems(graphqlAuthenticator *graphql.GraphQLAuthenticator, 
 	return items, nil
 }
 
-// RecursiveListNode prints the remote node tree starting at id, indenting
-// each level to reflect folder depth.
+// RecursiveListNode logs the remote node tree starting at id, one structured
+// entry per node, with level indicating folder depth.
 func RecursiveListNode(graphqlAuthenticator *graphql.GraphQLAuthenticator, id string, level int) {
 	nodes, nodesErr := graphqlAuthenticator.GetAllNode(id, "NAME_ASC", nil, nil)
 	if nodesErr != nil {
 		panic(nodesErr)
 	}
 
-	var z string
-
-	z = ""
-
-	if level > 0 {
-		z = strings.Repeat(" ", level)
-	}
-
 	for _, child := range nodes {
-		fmt.Printf("%s|", z)
+		evt := log.Info().Int("level", level).Str("name", child.Name).Str("type", child.Type)
 		if child.Type == "FOLDER" {
-			fmt.Printf("%s (%s) \n", child.Name, child.Type)
+			evt.Msg("Node")
 			RecursiveListNode(graphqlAuthenticator, child.ID, level+1)
-		} else {
-			if child.Extension != nil {
-				fmt.Printf("%s.%s (%s) - DIGEST [%s] \n", child.Name, *child.Extension, child.Type, *child.Digest)
-			} else {
-				fmt.Printf("%s (%s) - DIGEST [%s]\n", child.Name, child.Type, *child.Digest)
-			}
+			continue
 		}
+		if child.Extension != nil {
+			evt = evt.Str("extension", *child.Extension)
+		}
+		evt.Str("digest", *child.Digest).Msg("Node")
 	}
 }
 
@@ -105,8 +96,7 @@ func CreateLocalFolder(path string) error {
 	err := os.Mkdir(path, 0755)
 	if err != nil {
 		if os.IsExist(err) {
-			// Folder already exists, skip
-			fmt.Errorf("folder already exist error: %w", err)
+			log.Debug().Str("path", path).Msg("Folder already exists, skip")
 			return nil
 		}
 		// Other error, return it
@@ -146,9 +136,8 @@ func RecursiveFileDownloader(graphqlAuthenticator *graphql.GraphQLAuthenticator,
 	for _, child := range nodes {
 		if child.Type == "FOLDER" {
 			folderPath := folderPath + "/" + child.Name
-			err := CreateLocalFolder(folderPath)
-			if err != nil {
-				fmt.Errorf("folder create error: %w", err)
+			if err := CreateLocalFolder(folderPath); err != nil {
+				log.Warn().Err(err).Str("path", folderPath).Msg("Creating local folder failed")
 			}
 			RecursiveFileDownloader(graphqlAuthenticator, carbonio, child.ID, folderPath)
 		} else {
@@ -158,26 +147,32 @@ func RecursiveFileDownloader(graphqlAuthenticator *graphql.GraphQLAuthenticator,
 				sem <- struct{}{} // acquire semaphore slot
 				go func() {
 					exitStat, downErr := carbonio.DownloadFile(graphqlAuthenticator.AuthToken, child.ID, folderPath, fileName, int64(*child.Size), maxRetries, &wg, sem)
+					destPath := folderPath + "/" + fileName
 					if downErr != nil {
-						fmt.Printf("[ERROR] %s - ", downErr)
+						log.Error().Err(downErr).Str("path", destPath).Msg("Download failed")
+						return
 					}
+					evt := log.Info().Str("path", destPath)
 					if exitStat != nil {
-						fmt.Printf("[INFO] %s - ", *exitStat)
+						evt = evt.Str("status", *exitStat)
 					}
-					fmt.Printf("%s/%s.%s\n", folderPath, child.Name, *child.Extension)
+					evt.Msg("Downloaded file")
 				}()
 			} else {
 				wg.Add(1)
 				sem <- struct{}{} // acquire semaphore slot
 				go func() {
 					exitStat, downErr := carbonio.DownloadFile(graphqlAuthenticator.AuthToken, child.ID, folderPath, child.Name, int64(*child.Size), maxRetries, &wg, sem)
+					destPath := folderPath + "/" + child.Name
 					if downErr != nil {
-						fmt.Printf("[ERROR] %s - ", downErr)
+						log.Error().Err(downErr).Str("path", destPath).Msg("Download failed")
+						return
 					}
+					evt := log.Info().Str("path", destPath)
 					if exitStat != nil {
-						fmt.Printf("[INFO] %s - ", *exitStat)
+						evt = evt.Str("status", *exitStat)
 					}
-					fmt.Printf("%s/%s\n", folderPath, child.Name)
+					evt.Msg("Downloaded file")
 				}()
 			}
 		}

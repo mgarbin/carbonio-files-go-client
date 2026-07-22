@@ -12,14 +12,15 @@ package main
 import (
 	"embed"
 	"flag"
-	"fmt"
 	"io/fs"
 	"os"
 
 	"carbonio-files-go-client/pkg/actions"
 	"carbonio-files-go-client/pkg/carbonio"
 	"carbonio-files-go-client/pkg/config"
+	"carbonio-files-go-client/pkg/logger"
 
+	"github.com/rs/zerolog/log"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -29,6 +30,12 @@ import (
 var assets embed.FS
 
 func main() {
+	if _, err := logger.Init(logger.Default()); err != nil {
+		// logger.Default() never fails validation; guard anyway so a future
+		// change to Default() cannot silently produce a broken logger.
+		panic(err)
+	}
+
 	cliMode, rest := splitCLIFlag(os.Args[1:])
 
 	if cliMode {
@@ -40,8 +47,8 @@ func main() {
 	}
 
 	if len(rest) > 0 {
-		fmt.Fprintln(os.Stderr, "Unknown arguments:", rest)
-		fmt.Fprintln(os.Stderr, "Pass -cli to use the command-line interface, or run with no arguments to open the desktop app.")
+		log.Error().Strs("args", rest).Msg("Unknown arguments")
+		log.Error().Msg("Pass -cli to use the command-line interface, or run with no arguments to open the desktop app.")
 		os.Exit(1)
 	}
 
@@ -66,7 +73,7 @@ func splitCLIFlag(args []string) (cliMode bool, rest []string) {
 func runGUI() {
 	frontendFS, err := fs.Sub(assets, "frontend/dist")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error preparing GUI assets:", err)
+		log.Error().Err(err).Msg("Error preparing GUI assets")
 		os.Exit(1)
 	}
 
@@ -82,13 +89,14 @@ func runGUI() {
 		AssetServer: &assetserver.Options{
 			Assets: frontendFS,
 		},
-		OnStartup: app.startup,
+		OnStartup:  app.startup,
+		OnShutdown: app.shutdown,
 		Bind: []interface{}{
 			app,
 		},
 	})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error starting GUI:", err)
+		log.Error().Err(err).Msg("Error starting GUI")
 		os.Exit(1)
 	}
 }
@@ -96,50 +104,6 @@ func runGUI() {
 // runCLI is the original command-line entry point: it holds every flag
 // documented in the README, gated behind the top-level -cli flag.
 func runCLI() {
-	cfg, err := config.LoadConfig("config.yaml")
-	if err != nil {
-		fmt.Printf("Error loading config: %v\n", err)
-		return
-	}
-
-	var zmAuthToken *string
-	zmAuthToken = cfg.Main.AuthToken
-
-	carbonioAuth := &carbonio.HTTPAuthenticator{Endpoint: cfg.Main.Endpoint}
-
-	// Read local filesystem items
-	localFolder := "./files"
-
-	if cfg.Main.FilesFolder != "" {
-		localFolder = cfg.Main.FilesFolder
-	}
-
-	// if folder doesn't exist, create it and initialize empty cache
-	if _, err := os.Stat(localFolder); os.IsNotExist(err) {
-		if err := os.MkdirAll(localFolder, 0755); err != nil {
-			fmt.Println("Error creating local folder:", err)
-			return
-		}
-		fmt.Println("Local folder created:", localFolder)
-	}
-
-	if zmAuthToken == nil {
-
-		carbonioToken, errCarbonioToken := carbonioAuth.CarbonioZxAuth(cfg.Main.Username, cfg.Main.Password)
-
-		if errCarbonioToken != nil {
-			fmt.Printf("Error obtaining Carbonio token: %v\n", errCarbonioToken)
-			return
-		}
-
-		if carbonioToken != nil {
-			zmAuthToken = carbonioToken
-		} else {
-			fmt.Println("Failed to obtain Carbonio token and no authToken provided in config")
-			return
-		}
-	}
-
 	listAllNode := flag.Bool("getAllNode", false, "Use this flag to obtain all files node")
 	downloadAllFiles := flag.Bool("downloadAllFiles", false, "Use this flag to create Folder directory tree and download all files")
 	createFolder := flag.String("createFolder", "", "Use this flag to create a folder (specify Name) then specify a parentId where to create it")
@@ -158,8 +122,69 @@ func runCLI() {
 	destinationId := flag.String("destinationId", "", "Use this flag to specify the destination folder id for moveNodes")
 	nodesIdList := flag.String("nodesIdList", "", "Use this flag to specify a comma-separated list of node ids for moveNodes or deleteNodes")
 	trashNodes := flag.Bool("trashNodes", false, "Use this flag to move nodes to trash instead of deleting permanently")
+	logLevel := flag.String("logLevel", "", "Log level: trace, debug, info, warn, error, fatal, panic, disabled (default: info, or config.yaml Logging.level)")
+	logFormat := flag.String("logFormat", "", "Log format: console or json (default: console, or config.yaml Logging.format)")
+	logOutput := flag.String("logOutput", "", "Log output: console, file or both (default: console, or config.yaml Logging.output)")
+	logPath := flag.String("logPath", "", "Log file path, used when -logOutput is file or both (default: logs/carbonio-files-go-client.log, or config.yaml Logging.path)")
 
 	flag.Parse()
+
+	cfg, err := config.LoadConfig("config.yaml")
+	if err != nil {
+		log.Error().Err(err).Msg("Error loading config")
+		return
+	}
+
+	logCfg := logger.Config{
+		Level:    firstNonEmpty(*logLevel, cfg.Logging.Level),
+		Format:   logger.Format(firstNonEmpty(*logFormat, cfg.Logging.Format)),
+		Output:   logger.Output(firstNonEmpty(*logOutput, cfg.Logging.Output)),
+		FilePath: firstNonEmpty(*logPath, cfg.Logging.Path),
+	}
+	closer, err := logger.Init(logCfg)
+	if err != nil {
+		log.Error().Err(err).Msg("Error configuring logger")
+		return
+	}
+	defer closer.Close()
+
+	var zmAuthToken *string
+	zmAuthToken = cfg.Main.AuthToken
+
+	carbonioAuth := &carbonio.HTTPAuthenticator{Endpoint: cfg.Main.Endpoint}
+
+	// Read local filesystem items
+	localFolder := "./files"
+
+	if cfg.Main.FilesFolder != "" {
+		localFolder = cfg.Main.FilesFolder
+	}
+
+	// if folder doesn't exist, create it and initialize empty cache
+	if _, err := os.Stat(localFolder); os.IsNotExist(err) {
+		if err := os.MkdirAll(localFolder, 0755); err != nil {
+			log.Error().Err(err).Str("folder", localFolder).Msg("Error creating local folder")
+			return
+		}
+		log.Info().Str("folder", localFolder).Msg("Local folder created")
+	}
+
+	if zmAuthToken == nil {
+
+		carbonioToken, errCarbonioToken := carbonioAuth.CarbonioZxAuth(cfg.Main.Username, cfg.Main.Password)
+
+		if errCarbonioToken != nil {
+			log.Error().Err(errCarbonioToken).Msg("Error obtaining Carbonio token")
+			return
+		}
+
+		if carbonioToken != nil {
+			zmAuthToken = carbonioToken
+		} else {
+			log.Error().Msg("Failed to obtain Carbonio token and no authToken provided in config")
+			return
+		}
+	}
 
 	if *printFlagInfo {
 		actions.PrintFlagInfo()
@@ -220,4 +245,16 @@ func runCLI() {
 			return
 		}
 	}
+}
+
+// firstNonEmpty returns the first non-empty string in vals, or "" if all are
+// empty. Used to apply the "-flag overrides config.yaml overrides built-in
+// default" precedence for logging settings.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

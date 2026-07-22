@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/andybalholm/brotli"
+	"github.com/rs/zerolog/log"
 )
 
 type Authenticator interface {
@@ -104,6 +105,10 @@ type ProgressWriter struct {
 	FileName    string
 }
 
+// Write reports download progress via a live, carriage-return-redrawn
+// terminal bar. This intentionally stays on fmt/stdout instead of zerolog:
+// zerolog emits one line per call (with timestamp/level framing), which
+// would turn an in-place progress bar into hundreds of scrolling log lines.
 func (pw *ProgressWriter) Write(p []byte) (n int, err error) {
 	n, err = pw.Writer.Write(p)
 	pw.Downloaded += int64(n)
@@ -386,7 +391,7 @@ func (a *HTTPAuthenticator) DownloadFile(token, nodeId, destPath, fileName strin
 		return &exitStatus, nil
 	}
 
-	fmt.Printf("Error creating file: %s\n", lastErr)
+	log.Error().Err(lastErr).Str("fileName", fileName).Msg("Download failed after all retries")
 	return nil, lastErr
 }
 
@@ -421,7 +426,7 @@ func (a *HTTPAuthenticator) UploadFile(
 ) (string, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
-		fmt.Printf("Error: %s\n", err)
+		log.Error().Err(err).Str("filePath", filePath).Msg("Opening file for upload failed")
 		return "", err
 	}
 	defer file.Close()
@@ -442,7 +447,7 @@ func (a *HTTPAuthenticator) UploadFile(
 	url := "https://" + a.Endpoint + "/services/files/" + uploadEndpoint
 	req, err := http.NewRequest("POST", url, file)
 	if err != nil {
-		fmt.Printf("Error: %s\n", err)
+		log.Error().Err(err).Msg("Building upload request failed")
 		return "", err
 	}
 
@@ -450,7 +455,7 @@ func (a *HTTPAuthenticator) UploadFile(
 
 	contentLength, err := GetFileContentLength(filePath)
 	if err != nil {
-		fmt.Printf("Error: %s\n", err)
+		log.Error().Err(err).Str("filePath", filePath).Msg("Getting file content length failed")
 		return "", err
 	}
 
@@ -497,7 +502,7 @@ func (a *HTTPAuthenticator) UploadFile(
 	// Perform request
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		fmt.Printf("Error: %s\n", err)
+		log.Error().Err(err).Msg("Upload request failed")
 		return "", err
 	}
 	defer resp.Body.Close()
@@ -509,11 +514,11 @@ func (a *HTTPAuthenticator) UploadFile(
 		return "", fmt.Errorf("failed to read upload response body: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		fmt.Printf("Error: %s\n", string(body))
+		log.Error().Int("status", resp.StatusCode).Str("body", string(body)).Msg("Upload failed with non-OK status")
 		return "", fmt.Errorf("upload failed: %s", resp.Status)
 	}
 
-	fmt.Println("Response:", string(body))
+	log.Debug().Str("body", string(body)).Msg("Upload response body")
 
 	var uploadResp struct {
 		NodeId string `json:"nodeId"`

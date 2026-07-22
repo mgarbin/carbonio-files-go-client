@@ -4,9 +4,10 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 type API interface {
@@ -58,19 +59,16 @@ func (a *GraphQLAuthenticator) GetAllNode(nodeID string, sort string, pageToken 
 	)
 
 	if err != nil {
-		log.Fatalf("GraphQL query failed: %v", err)
+		log.Error().Err(err).Msg("GraphQL query failed")
 		return nil, err
 	}
 
-	// Print the results
 	if resp.GetNode == nil {
-		//fmt.Println("No node found")
 		return nil, nil
 	}
 
 	var children []*Node
 
-	//fmt.Printf("Node: %s, Name: %s\n", resp.GetNode.ID, resp.GetNode.Name)
 	if resp.GetNode.Children != nil {
 
 		if resp.GetNode.Children.PageToken != nil {
@@ -83,10 +81,6 @@ func (a *GraphQLAuthenticator) GetAllNode(nodeID string, sort string, pageToken 
 		}
 
 		return resp.GetNode.Children.Nodes, nil
-		/*fmt.Println("Children:")
-		for _, child := range resp.GetNode.Children.Nodes {
-			fmt.Printf("- Child Node: %s (%s)\n", child.ID, child.Name)
-		}*/
 	}
 
 	return nil, nil
@@ -117,7 +111,7 @@ func (a *GraphQLAuthenticator) CreateFolder(parentId string, folderName string) 
 	)
 
 	if err != nil {
-		log.Fatalf("GraphQL query failed: %v", err)
+		log.Error().Err(err).Msg("GraphQL query failed")
 		return nil, err
 	}
 
@@ -150,7 +144,7 @@ func (a *GraphQLAuthenticator) MoveNodes(nodeIds []string, targetParentId string
 	)
 
 	if err != nil {
-		log.Fatalf("GraphQL query failed: %v", err)
+		log.Error().Err(err).Msg("GraphQL query failed")
 		return nil, err
 	}
 
@@ -182,7 +176,7 @@ func (a *GraphQLAuthenticator) TrashNodes(nodeIds []string) ([]string, error) {
 	)
 
 	if err != nil {
-		log.Fatalf("GraphQL query failed: %v", err)
+		log.Error().Err(err).Msg("GraphQL query failed")
 		return nil, err
 	}
 
@@ -214,7 +208,7 @@ func (a *GraphQLAuthenticator) DeleteNodes(nodeIds []string) ([]string, error) {
 	)
 
 	if err != nil {
-		log.Fatalf("GraphQL query failed: %v", err)
+		log.Error().Err(err).Msg("GraphQL query failed")
 		return nil, err
 	}
 

@@ -4,3 +4,9 @@ Main:
   password: "mypassword"
 #  authToken: ""
 #  filesLocalFolder: "./files"
+
+Logging:
+#  level: "info"      # trace, debug, info, warn, error, fatal, panic, disabled (default: info)
+#  format: "console"  # "console" (human-readable) or "json" (default: console)
+#  output: "console"  # "console", "file" or "both" (default: console)
+#  path: "logs/carbonio-files-go-client.log"  # used when output is "file" or "both"

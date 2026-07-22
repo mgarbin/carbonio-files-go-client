@@ -63,9 +63,19 @@ Main:
   password: "mypassword"         # Carbonio account password
 #  AuthToken: "ZM_AUTH_TOKEN"    # Optional: pre-computed auth token (skips login)
 #  filesLocalFolder: "./files"   # Optional: by default it create the folder "files" where you are running carbonio-files-go-client
+
+Logging:
+#  level: "info"      # trace, debug, info, warn, error, fatal, panic, disabled (default: info)
+#  format: "console"  # "console" (human-readable, colorized) or "json" (default: console)
+#  output: "console"  # "console", "file" or "both" (default: console)
+#  path: "logs/carbonio-files-go-client.log"  # log file path, used when output is "file" or "both"
 ```
 
 When `AuthToken` is provided, the username/password login step is skipped and the token is used directly.
+
+Every `Logging` field is optional and overridable from the command line (see
+[Logging](#logging) below); the `Logging` block itself may be omitted entirely
+to use the built-in defaults (info level, console format, console output).
 
 ## Usage
 
@@ -210,6 +220,38 @@ The cache database is updated after each operation.
 | `-destinationId` | string | Destination folder node ID (used with `-moveNodes`) |
 | `-overwriteVersion` | bool | Overwrite latest version when uploading a new version |
 | `-v` | bool | Print all available flags |
+| `-logLevel` | string | Log level: trace, debug, info, warn, error, fatal, panic, disabled (default: info, or `config.yaml` `Logging.level`) |
+| `-logFormat` | string | Log format: console or json (default: console, or `config.yaml` `Logging.format`) |
+| `-logOutput` | string | Log output: console, file or both (default: console, or `config.yaml` `Logging.output`) |
+| `-logPath` | string | Log file path, used when `-logOutput` is file or both (default: `logs/carbonio-files-go-client.log`, or `config.yaml` `Logging.path`) |
+
+## Logging
+
+Logging is powered by [rs/zerolog](https://github.com/rs/zerolog). Every log
+line goes through a single process-wide logger (`pkg/logger`) that can be
+configured independently along two axes:
+
+- **Format** - `console` (human-readable, colorized) or `json` (one JSON object per line, suited for log aggregators).
+- **Output** - `console` (stderr), `file`, or `both`.
+
+Precedence for the CLI (`-cli`) is `-logLevel`/`-logFormat`/`-logOutput`/`-logPath`
+flags > the `Logging` section of `config.yaml` > built-in defaults
+(`info` / `console` / `console` / `logs/carbonio-files-go-client.log`). The log
+file's parent directory is created automatically if it doesn't exist.
+
+```bash
+# JSON logs written to a file, nothing on the console
+./carbonio-files-client -cli -getAllNode -logFormat json -logOutput file -logPath /var/log/carbonio-files-client.log
+
+# Debug-level logs on both console and file
+./carbonio-files-client -cli -liveCacheSync -logLevel debug -logOutput both
+```
+
+The [desktop GUI](#desktop-gui) has no CLI flags; instead its logging settings
+are persisted in the same encrypted SQLite config row as the saved
+credentials (see [Configuration storage (SQLite)](#configuration-storage-sqlite)),
+read on startup, and can be changed at runtime through the `App.GetLoggingConfig`
+/ `App.UpdateLoggingConfig` Wails-bound methods.
 
 ## Project structure
 
@@ -260,6 +302,7 @@ carbonio-files-go-client/
 | [golang.org/x/text](https://pkg.go.dev/golang.org/x/text) | Unicode text normalization |
 | [gopkg.in/yaml.v3](https://pkg.go.dev/gopkg.in/yaml.v3) | YAML configuration parsing |
 | [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite) | Pure-Go SQLite driver |
+| [rs/zerolog](https://github.com/rs/zerolog) | Structured logging (console/JSON, console/file/both) |
 
 ## Configuration storage (SQLite)
 
@@ -267,7 +310,8 @@ In addition to `config.yaml`, the same `Main` configuration can be persisted in
 the SQLite database managed by `pkg/sqlite` (`sqlitecache.SqliteHelper`), in a
 singleton `config` table (`id` is always `1`). `Password` and `AuthToken` are
 encrypted at rest with AES-256-GCM before being written; every other field
-(`endpoint`, `username`, `files_local_folder`) is stored as plain text. This is
+(`endpoint`, `username`, `files_local_folder`, `log_level`, `log_format`,
+`log_output`, `log_path`) is stored as plain text. This is
 exactly the mechanism the [desktop GUI](#desktop-gui) uses to remember your
 login across launches (in its own `gui-config.db`, independent from the CLI's
 `./file_sync_cache.db`).

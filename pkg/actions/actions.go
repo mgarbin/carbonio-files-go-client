@@ -19,21 +19,23 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 // PrintFlagInfo prints every registered flag with its usage and default
 // value. Backs the -v flag.
 func PrintFlagInfo() {
-	fmt.Println("Available flags:")
+	log.Info().Msg("Available flags:")
 	flag.VisitAll(func(f *flag.Flag) {
-		fmt.Printf("  -%s: %s (default: %q)\n", f.Name, f.Usage, f.DefValue)
+		log.Info().Str("flag", f.Name).Str("usage", f.Usage).Str("default", f.DefValue).Msg("flag")
 	})
 }
 
 // ListAllNode prints the whole remote node tree starting from LOCAL_ROOT.
 // Backs the -getAllNode flag.
 func ListAllNode(endpoint, authToken string) {
-	fmt.Println("Here all nodes found with graphl query!")
+	log.Info().Msg("Here all nodes found with graphl query!")
 	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: authToken}
 	baseFolder := "LOCAL_ROOT"
 	utils.RecursiveListNode(graphqlAuthenticator, baseFolder, 0)
@@ -52,9 +54,9 @@ func DownloadAllFiles(endpoint, authToken string, carbonioAuth *carbonio.HTTPAut
 func UploadFile(carbonioAuth *carbonio.HTTPAuthenticator, authToken, parentId, uploadFile string, nodeId *string) {
 	newNodeID, uploadErr := carbonioAuth.UploadFile(authToken, parentId, uploadFile, false, false, nodeId)
 	if uploadErr != nil {
-		fmt.Println("[ERROR]:", uploadErr)
+		log.Error().Err(uploadErr).Msg("Upload file failed")
 	} else {
-		fmt.Println("[INFO] Uploaded file, nodeId:", newNodeID)
+		log.Info().Str("nodeId", newNodeID).Msg("Uploaded file")
 	}
 }
 
@@ -63,9 +65,9 @@ func UploadFile(carbonioAuth *carbonio.HTTPAuthenticator, authToken, parentId, u
 func UploadNewVersionFile(carbonioAuth *carbonio.HTTPAuthenticator, authToken, parentId, uploadNewVersionFile string, overwriteVersion bool, nodeId *string) {
 	newNodeID, uploadErr := carbonioAuth.UploadFile(authToken, parentId, uploadNewVersionFile, true, overwriteVersion, nodeId)
 	if uploadErr != nil {
-		fmt.Println("[ERROR]:", uploadErr)
+		log.Error().Err(uploadErr).Msg("Upload new version failed")
 	} else {
-		fmt.Println("[INFO] Uploaded new version, nodeId:", newNodeID)
+		log.Info().Str("nodeId", newNodeID).Msg("Uploaded new version")
 	}
 }
 
@@ -75,9 +77,9 @@ func CreateFolder(endpoint, authToken, parentId, folderName string) {
 	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: authToken}
 	newFolder, err := graphqlAuthenticator.CreateFolder(parentId, folderName)
 	if err != nil {
-		fmt.Println("[ERROR]: ", err)
+		log.Error().Err(err).Msg("Create folder failed")
 	} else {
-		fmt.Println("[INFO] New folder id ", newFolder.ID)
+		log.Info().Str("nodeId", newFolder.ID).Msg("New folder created")
 	}
 }
 
@@ -86,17 +88,17 @@ func CreateFolder(endpoint, authToken, parentId, folderName string) {
 // message has already been printed.
 func MoveNodes(endpoint, authToken, destinationId, nodesIdList string) error {
 	if destinationId == "" || nodesIdList == "" {
-		fmt.Println("Error: destinationId and nodesIdList must be provided for moveNodes")
+		log.Error().Msg("destinationId and nodesIdList must be provided for moveNodes")
 		return fmt.Errorf("destinationId and nodesIdList must be provided for moveNodes")
 	}
 	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: authToken}
 	nodeIDs := strings.Split(nodesIdList, ",")
 	moveResp, err := graphqlAuthenticator.MoveNodes(nodeIDs, destinationId)
 	if err != nil {
-		fmt.Printf("[ERROR] moving nodes: %v\n", err)
+		log.Error().Err(err).Msg("Moving nodes failed")
 		return err
 	}
-	fmt.Printf("[INFO] Moved nodes to destination %s: %v\n", destinationId, moveResp)
+	log.Info().Str("destinationId", destinationId).Strs("movedNodes", moveResp).Msg("Moved nodes")
 	return nil
 }
 
@@ -105,17 +107,17 @@ func MoveNodes(endpoint, authToken, destinationId, nodesIdList string) error {
 // message has already been printed.
 func TrashNodes(endpoint, authToken, nodesIdList string) error {
 	if nodesIdList == "" {
-		fmt.Println("Error: nodesIdList must be provided for trashNodes")
+		log.Error().Msg("nodesIdList must be provided for trashNodes")
 		return fmt.Errorf("nodesIdList must be provided for trashNodes")
 	}
 	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: authToken}
 	nodeIDs := strings.Split(nodesIdList, ",")
 	trashResp, err := graphqlAuthenticator.TrashNodes(nodeIDs)
 	if err != nil {
-		fmt.Printf("[ERROR] trashing nodes: %v\n", err)
+		log.Error().Err(err).Msg("Trashing nodes failed")
 		return err
 	}
-	fmt.Printf("[INFO] Trashed nodes: %v\n", trashResp)
+	log.Info().Strs("trashedNodes", trashResp).Msg("Trashed nodes")
 	return nil
 }
 
@@ -124,17 +126,17 @@ func TrashNodes(endpoint, authToken, nodesIdList string) error {
 // message has already been printed.
 func DeleteNodes(endpoint, authToken, nodesIdList string) error {
 	if nodesIdList == "" {
-		fmt.Println("Error: nodesIdList must be provided for deleteNodes")
+		log.Error().Msg("nodesIdList must be provided for deleteNodes")
 		return fmt.Errorf("nodesIdList must be provided for deleteNodes")
 	}
 	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: authToken}
 	nodeIDs := strings.Split(nodesIdList, ",")
 	deleteResp, err := graphqlAuthenticator.DeleteNodes(nodeIDs)
 	if err != nil {
-		fmt.Printf("[ERROR] deleting nodes: %v\n", err)
+		log.Error().Err(err).Msg("Deleting nodes failed")
 		return err
 	}
-	fmt.Printf("[INFO] Deleted nodes: %v\n", deleteResp)
+	log.Info().Strs("deletedNodes", deleteResp).Msg("Deleted nodes")
 	return nil
 }
 
@@ -144,12 +146,12 @@ func DeleteNodes(endpoint, authToken, nodesIdList string) error {
 func LiveSyncCheck(endpoint, authToken, localFolder string, cacheSync bool) error {
 
 	if cacheSync {
-		fmt.Println("Cache sync not yet implemented")
+		log.Warn().Msg("Cache sync not yet implemented")
 	}
 
 	localMapItems, err := localfs.ReadFolderRecursive(localFolder, false)
 	if err != nil {
-		fmt.Println("Error:", err)
+		log.Error().Err(err).Msg("Reading local folder failed")
 		return err
 	}
 
@@ -158,21 +160,21 @@ func LiveSyncCheck(endpoint, authToken, localFolder string, cacheSync bool) erro
 
 	remoteMapItems, err := utils.RecursiveListNodeItems(graphqlAuthenticator, baseFolder, "")
 	if err != nil {
-		fmt.Println("Error:", err)
+		log.Error().Err(err).Msg("Fetching remote items failed")
 		return err
 	}
 
 	diffs := localfs.ComparePathMapsMulti(localMapItems, remoteMapItems)
-	for path, diffList := range diffs {
-		fmt.Printf("Path: %s\n", path)
+	for itemPath, diffList := range diffs {
 		for _, diff := range diffList {
-			fmt.Printf("  Difference: %s\n", diff.Diff)
+			evt := log.Info().Str("path", itemPath).Str("difference", string(diff.Diff))
 			if diff.Local != nil {
-				fmt.Printf("    Local: %+v\n", *diff.Local)
+				evt = evt.Interface("local", *diff.Local)
 			}
 			if diff.Remote != nil {
-				fmt.Printf("    Remote: %+v\n", *diff.Remote)
+				evt = evt.Interface("remote", *diff.Remote)
 			}
+			evt.Msg("Sync difference detected")
 		}
 	}
 
@@ -188,33 +190,33 @@ func UpdateCacheSync(endpoint, authToken, localFolder string) error {
 	// Initialize SQLite database
 	newdb, err := sqlitecache.NewSqliteHelper("./file_sync_cache.db")
 	if err != nil {
-		fmt.Println("Error:", err)
+		log.Error().Err(err).Msg("Opening sqlite cache failed")
 		return err
 	}
 	defer newdb.Close()
-	fmt.Println("SQLite cache initialized successfully")
+	log.Info().Msg("SQLite cache initialized successfully")
 
 	localMapItems, err := localfs.ReadFolderRecursive(localFolder, false)
 	if err != nil {
-		fmt.Println("Error reading local folder:", err)
+		log.Error().Err(err).Msg("Reading local folder failed")
 		return err
 	}
-	fmt.Printf("Found %d local items\n", len(localMapItems))
+	log.Info().Int("count", len(localMapItems)).Msg("Found local items")
 
 	// Fetch remote items from GraphQL
 	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: authToken}
 	baseFolder := "LOCAL_ROOT"
 	remoteMapItems, err := utils.RecursiveListNodeItems(graphqlAuthenticator, baseFolder, "")
 	if err != nil {
-		fmt.Println("Error fetching remote items:", err)
+		log.Error().Err(err).Msg("Fetching remote items failed")
 		return err
 	}
-	fmt.Printf("Found %d remote items\n", len(remoteMapItems))
+	log.Info().Int("count", len(remoteMapItems)).Msg("Found remote items")
 
 	// Check if the database is already populated
 	count, countErr := newdb.CountRecords()
 	if countErr != nil {
-		fmt.Println("Error counting records:", countErr)
+		log.Error().Err(countErr).Msg("Counting records failed")
 		return countErr
 	}
 
@@ -230,7 +232,7 @@ func UpdateCacheSync(endpoint, authToken, localFolder string) error {
 		// and update their flags accordingly.
 		allRecords, err := newdb.QueryAll()
 		if err != nil {
-			fmt.Println("Error querying existing records:", err)
+			log.Error().Err(err).Msg("Querying existing records failed")
 			return err
 		}
 
@@ -242,7 +244,7 @@ func UpdateCacheSync(endpoint, authToken, localFolder string) error {
 				if rec.LocalDeleted == 0 {
 					if _, exists := localMapItems[rec.LocalPath]; !exists {
 						updateFields["local_deleted"] = 1
-						fmt.Printf("[INFO] Local file deleted: %s\n", rec.LocalPath)
+						log.Info().Str("path", rec.LocalPath).Msg("Local file deleted")
 					}
 				}
 			}
@@ -252,7 +254,7 @@ func UpdateCacheSync(endpoint, authToken, localFolder string) error {
 				if rec.RemoteDeleted == 0 {
 					if _, exists := remoteMapItems[rec.RemotePath]; !exists {
 						updateFields["remote_deleted"] = 1
-						fmt.Printf("[INFO] Remote file deleted: %s\n", rec.RemotePath)
+						log.Info().Str("path", rec.RemotePath).Msg("Remote file deleted")
 					}
 				}
 			}
@@ -269,7 +271,7 @@ func UpdateCacheSync(endpoint, authToken, localFolder string) error {
 						updateFields["remote_digest"] = newRemoteDigest
 						updateFields["remote_last_modified"] = newRemoteLastModified
 						hasContentUpdate = true
-						fmt.Printf("[INFO] Remote node updated: %s\n", rec.RemotePath)
+						log.Info().Str("path", rec.RemotePath).Msg("Remote node updated")
 					}
 				}
 			}
@@ -285,7 +287,7 @@ func UpdateCacheSync(endpoint, authToken, localFolder string) error {
 						updateFields["local_digest"] = newLocalDigest
 						updateFields["local_last_modified"] = newLocalLastModified
 						hasContentUpdate = true
-						fmt.Printf("[INFO] Local item updated: %s\n", rec.LocalPath)
+						log.Info().Str("path", rec.LocalPath).Msg("Local item updated")
 					}
 				}
 			}
@@ -322,14 +324,14 @@ func UpdateCacheSync(endpoint, authToken, localFolder string) error {
 
 			if len(updateFields) > 0 {
 				if updateErr := newdb.UpdateFileSync("id", rec.ID, updateFields); updateErr != nil {
-					fmt.Printf("[WARN] DB update for record %d: %v\n", rec.ID, updateErr)
+					log.Warn().Err(updateErr).Int64("recordId", rec.ID).Msg("DB update failed")
 				}
 			}
 		}
 	} else {
 		// DB is empty: reset auto-increment counter and do a full fresh initialization.
 		if err = newdb.DeleteAllAndResetAutoIncrement(); err != nil {
-			fmt.Println("Error clearing cache:", err)
+			log.Error().Err(err).Msg("Clearing cache failed")
 			return err
 		}
 	}
@@ -412,16 +414,16 @@ func UpdateCacheSync(endpoint, authToken, localFolder string) error {
 			localDeleted, remoteDeleted,
 		)
 		if insertErr != nil {
-			fmt.Printf("Error inserting %s: %v\n", itemPath, insertErr)
+			log.Error().Err(insertErr).Str("path", itemPath).Msg("Inserting record failed")
 		} else {
 			insertCount++
 		}
 	}
 
 	if count > 0 {
-		fmt.Printf("Cache sync updated: deletions detected, %d new items inserted\n", insertCount)
+		log.Info().Int("inserted", insertCount).Msg("Cache sync updated: deletions detected, new items inserted")
 	} else {
-		fmt.Printf("Cache sync initialized with %d items\n", insertCount)
+		log.Info().Int("inserted", insertCount).Msg("Cache sync initialized")
 	}
 
 	return nil
@@ -437,7 +439,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 	// Open the existing SQLite cache database
 	cacheDb, err := sqlitecache.NewSqliteHelper("./file_sync_cache.db")
 	if err != nil {
-		fmt.Println("Error opening cache:", err)
+		log.Error().Err(err).Msg("Opening cache failed")
 		return err
 	}
 	defer cacheDb.Close()
@@ -447,7 +449,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 	// Build a path → node_id map from every record that already has a remote presence
 	allRecords, err := cacheDb.QueryAll()
 	if err != nil {
-		fmt.Println("Error querying cache:", err)
+		log.Error().Err(err).Msg("Querying cache failed")
 		return err
 	}
 	pathToNodeID := make(map[string]string)
@@ -463,10 +465,10 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 	// --- Download remote_only items to local ---
 	remoteOnly, err := cacheDb.QueryBySyncStatus("remote_only")
 	if err != nil {
-		fmt.Println("Error querying remote_only:", err)
+		log.Error().Err(err).Msg("Querying remote_only failed")
 		return err
 	}
-	fmt.Printf("[INFO] Found %d remote_only items to download\n", len(remoteOnly))
+	log.Info().Int("count", len(remoteOnly)).Msg("Found remote_only items to download")
 
 	// Process shallowest paths first so parent directories are created before children
 	sort.Slice(remoteOnly, func(i, j int) bool {
@@ -480,17 +482,17 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 		if rec.IsDirectory {
 			localDirPath := filepath.Join(localFolder, filepath.FromSlash(rec.RemotePath))
 			if err := os.MkdirAll(localDirPath, 0755); err != nil {
-				fmt.Printf("[ERROR] creating local dir %s: %v\n", localDirPath, err)
+				log.Error().Err(err).Str("path", localDirPath).Msg("Creating local dir failed")
 				continue
 			}
-			fmt.Printf("[INFO] Created local dir: %s\n", localDirPath)
+			log.Info().Str("path", localDirPath).Msg("Created local dir")
 			if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
 				"local_path":      rec.RemotePath,
 				"local_path_hash": localfs.PathHash(rec.RemotePath),
 				"sync_status":     "synced",
 				"last_synced":     now,
 			}); updateErr != nil {
-				fmt.Printf("[WARN] DB update for %s: %v\n", rec.RemotePath, updateErr)
+				log.Warn().Err(updateErr).Str("path", rec.RemotePath).Msg("DB update failed")
 			}
 		} else {
 			dirPart := path.Dir(rec.RemotePath)
@@ -500,7 +502,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 				destPath = filepath.Join(localFolder, filepath.FromSlash(dirPart))
 			}
 			if err := os.MkdirAll(destPath, 0755); err != nil {
-				fmt.Printf("[ERROR] creating local dir %s: %v\n", destPath, err)
+				log.Error().Err(err).Str("path", destPath).Msg("Creating local dir failed")
 				continue
 			}
 			var wg sync.WaitGroup
@@ -510,10 +512,10 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 			exitStat, downErr := carbonioAuth.DownloadFile(authToken, rec.NodeID, destPath, fileName, rec.RemoteSize, maxRetries, &wg, sem)
 			wg.Wait()
 			if downErr != nil {
-				fmt.Printf("[ERROR] downloading %s: %v\n", rec.RemotePath, downErr)
+				log.Error().Err(downErr).Str("path", rec.RemotePath).Msg("Downloading failed")
 				continue
 			} else if exitStat != nil {
-				fmt.Printf("[INFO] %s - %s\n", *exitStat, rec.RemotePath)
+				log.Info().Str("path", rec.RemotePath).Str("status", *exitStat).Msg("Download status")
 			}
 			if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
 				"local_path":      rec.RemotePath,
@@ -523,7 +525,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 				"sync_status":     "synced",
 				"last_synced":     now,
 			}); updateErr != nil {
-				fmt.Printf("[WARN] DB update for %s: %v\n", rec.RemotePath, updateErr)
+				log.Warn().Err(updateErr).Str("path", rec.RemotePath).Msg("DB update failed")
 			}
 		}
 	}
@@ -531,10 +533,10 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 	// --- Upload local_only items to remote ---
 	localOnly, err := cacheDb.QueryBySyncStatus("local_only")
 	if err != nil {
-		fmt.Println("Error querying local_only:", err)
+		log.Error().Err(err).Msg("Querying local_only failed")
 		return err
 	}
-	fmt.Printf("[INFO] Found %d local_only items to upload\n", len(localOnly))
+	log.Info().Int("count", len(localOnly)).Msg("Found local_only items to upload")
 
 	// Process shallowest paths first so parent folders are created on remote before their children
 	sort.Slice(localOnly, func(i, j int) bool {
@@ -546,32 +548,31 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 			continue
 		}
 		parentPath := path.Dir(rec.LocalPath)
-		//print parentPath
-		fmt.Printf("[DEBUG] Processing %s, parent path: %s\n", rec.LocalPath, parentPath)
+		log.Debug().Str("path", rec.LocalPath).Str("parentPath", parentPath).Msg("Processing local_only item")
 		parentNodeID := "LOCAL_ROOT"
 		if parentPath != "." {
 			if id, ok := pathToNodeID[parentPath]; ok {
 				parentNodeID = id
-				fmt.Printf("[DEBUG] Found parent node ID in cache for %s: %s\n", parentPath, parentNodeID)
+				log.Debug().Str("parentPath", parentPath).Str("parentNodeId", parentNodeID).Msg("Found parent node ID in cache")
 			} else {
 				// Fall back to a direct DB lookup for an existing folder at that path
 				parentRec, dbErr := cacheDb.QueryFolderByPath(parentPath)
 				if dbErr != nil {
-					fmt.Printf("[ERROR] failed to query parent folder %s: %v\n", parentPath, dbErr)
+					log.Error().Err(dbErr).Str("parentPath", parentPath).Msg("Querying parent folder failed")
 				}
 				if parentRec != nil && parentRec.NodeID != "" {
 					parentNodeID = parentRec.NodeID
 					pathToNodeID[parentPath] = parentRec.NodeID
-					fmt.Printf("[DEBUG] Found parent node ID in DB for %s: %s\n", parentPath, parentNodeID)
+					log.Debug().Str("parentPath", parentPath).Str("parentNodeId", parentNodeID).Msg("Found parent node ID in DB")
 					if parentRec.RemotePath != parentPath {
-						fmt.Printf("[WARN] remote path mismatch for parent folder %s: cache has %s\n", parentPath, parentRec.RemotePath)
+						log.Warn().Str("parentPath", parentPath).Str("cachedPath", parentRec.RemotePath).Msg("Remote path mismatch for parent folder")
 					}
 					if parentRec.LocalDeleted != 0 || parentRec.RemoteDeleted != 0 {
-						fmt.Printf("[WARN] parent folder %s is marked deleted in cache, using LOCAL_ROOT as parent for %s\n", parentPath, rec.LocalPath)
+						log.Warn().Str("parentPath", parentPath).Str("path", rec.LocalPath).Msg("Parent folder marked deleted in cache, using LOCAL_ROOT as parent")
 						parentNodeID = "LOCAL_ROOT"
 					}
 				} else {
-					fmt.Printf("[WARN] remote parent folder %s not found in cache, using LOCAL_ROOT for %s\n", parentPath, rec.LocalPath)
+					log.Warn().Str("parentPath", parentPath).Str("path", rec.LocalPath).Msg("Remote parent folder not found in cache, using LOCAL_ROOT")
 				}
 			}
 		}
@@ -579,12 +580,12 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 			folderName := path.Base(rec.LocalPath)
 			newFolder, err := graphqlAuthenticator.CreateFolder(parentNodeID, folderName)
 			if err != nil {
-				fmt.Printf("[ERROR] creating remote folder %s: %v\n", rec.LocalPath, err)
+				log.Error().Err(err).Str("path", rec.LocalPath).Msg("Creating remote folder failed")
 				continue
 			}
 			if newFolder != nil {
 				pathToNodeID[rec.LocalPath] = newFolder.ID
-				fmt.Printf("[INFO] Created remote folder: %s (id: %s)\n", rec.LocalPath, newFolder.ID)
+				log.Info().Str("path", rec.LocalPath).Str("nodeId", newFolder.ID).Msg("Created remote folder")
 				if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
 					"node_id":          newFolder.ID,
 					"remote_path":      rec.LocalPath,
@@ -592,17 +593,17 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 					"sync_status":      "synced",
 					"last_synced":      now,
 				}); updateErr != nil {
-					fmt.Printf("[WARN] DB update for %s: %v\n", rec.LocalPath, updateErr)
+					log.Warn().Err(updateErr).Str("path", rec.LocalPath).Msg("DB update failed")
 				}
 			}
 		} else {
 			filePath := filepath.Join(localFolder, filepath.FromSlash(rec.LocalPath))
 			uploadedNodeID, uploadErr := carbonioAuth.UploadFile(authToken, parentNodeID, filePath, false, false, nil)
 			if uploadErr != nil {
-				fmt.Printf("[ERROR] uploading %s: %v\n", rec.LocalPath, uploadErr)
+				log.Error().Err(uploadErr).Str("path", rec.LocalPath).Msg("Uploading failed")
 				continue
 			}
-			fmt.Printf("[INFO] Uploaded: %s (nodeId: %s)\n", rec.LocalPath, uploadedNodeID)
+			log.Info().Str("path", rec.LocalPath).Str("nodeId", uploadedNodeID).Msg("Uploaded")
 			pathToNodeID[rec.LocalPath] = uploadedNodeID
 			if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
 				"node_id":          uploadedNodeID,
@@ -613,7 +614,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 				"sync_status":      "synced",
 				"last_synced":      now,
 			}); updateErr != nil {
-				fmt.Printf("[WARN] DB update for %s: %v\n", rec.LocalPath, updateErr)
+				log.Warn().Err(updateErr).Str("path", rec.LocalPath).Msg("DB update failed")
 			}
 		}
 	}
@@ -621,10 +622,10 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 	// --- Resolve out_of_sync items ---
 	outOfSync, err := cacheDb.QueryBySyncStatus("out_of_sync")
 	if err != nil {
-		fmt.Println("Error querying out_of_sync:", err)
+		log.Error().Err(err).Msg("Querying out_of_sync failed")
 		return err
 	}
-	fmt.Printf("[INFO] Found %d out_of_sync items to process\n", len(outOfSync))
+	log.Info().Int("count", len(outOfSync)).Msg("Found out_of_sync items to process")
 
 	for _, rec := range outOfSync {
 		if rec.LocalDeleted != 0 || rec.RemoteDeleted != 0 {
@@ -636,7 +637,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 				"sync_status": "synced",
 				"last_synced": now,
 			}); updateErr != nil {
-				fmt.Printf("[WARN] DB update for %s: %v\n", rec.RemotePath, updateErr)
+				log.Warn().Err(updateErr).Str("path", rec.RemotePath).Msg("DB update failed")
 			}
 			continue
 		}
@@ -647,14 +648,14 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 			var parseErr error
 			remoteTs, parseErr = strconv.ParseInt(rec.RemoteLastModified, 10, 64)
 			if parseErr != nil {
-				fmt.Printf("[WARN] could not parse remote_last_modified for %s: %v\n", rec.RemotePath, parseErr)
+				log.Warn().Err(parseErr).Str("path", rec.RemotePath).Msg("Could not parse remote_last_modified")
 			}
 		}
 		if rec.LocalLastModified != "" {
 			var parseErr error
 			localTs, parseErr = strconv.ParseInt(rec.LocalLastModified, 10, 64)
 			if parseErr != nil {
-				fmt.Printf("[WARN] could not parse local_last_modified for %s: %v\n", rec.LocalPath, parseErr)
+				log.Warn().Err(parseErr).Str("path", rec.LocalPath).Msg("Could not parse local_last_modified")
 			}
 		}
 
@@ -670,18 +671,18 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 				"sync_status": "synced",
 				"last_synced": now,
 			}); updateErr != nil {
-				fmt.Printf("[WARN] DB update for %s: %v\n", rec.RemotePath, updateErr)
+				log.Warn().Err(updateErr).Str("path", rec.RemotePath).Msg("DB update failed")
 			}
 			continue
 		}
 
-		//convert remoteTs and localTs to time.Time for better readability in logs
+		// convert remoteTs and localTs to time.Time for better readability in logs
 		remoteTime := utils.EpochToTime(remoteTs)
 		localTime := utils.EpochToTime(localTs)
 
 		if remoteTime.Equal(localTime) || remoteTime.After(localTime) {
 			// Remote is more recent (or timestamps are equal): download the remote version.
-			fmt.Printf("[INFO] Remote version is more recent for %s; downloading update\n", rec.RemotePath)
+			log.Info().Str("path", rec.RemotePath).Msg("Remote version is more recent; downloading update")
 			dirPart := path.Dir(rec.RemotePath)
 			fileName := path.Base(rec.RemotePath)
 			destPath := localFolder
@@ -689,7 +690,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 				destPath = filepath.Join(localFolder, filepath.FromSlash(dirPart))
 			}
 			if err := os.MkdirAll(destPath, 0755); err != nil {
-				fmt.Printf("[ERROR] creating local dir %s: %v\n", destPath, err)
+				log.Error().Err(err).Str("path", destPath).Msg("Creating local dir failed")
 				continue
 			}
 			var wg sync.WaitGroup
@@ -699,10 +700,10 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 			exitStat, downErr := carbonioAuth.DownloadFile(authToken, rec.NodeID, destPath, fileName, rec.RemoteSize, maxRetries, &wg, sem)
 			wg.Wait()
 			if downErr != nil {
-				fmt.Printf("[ERROR] downloading updated file %s: %v\n", rec.RemotePath, downErr)
+				log.Error().Err(downErr).Str("path", rec.RemotePath).Msg("Downloading updated file failed")
 				continue
 			} else if exitStat != nil {
-				fmt.Printf("[INFO] %s - %s\n", *exitStat, rec.RemotePath)
+				log.Info().Str("path", rec.RemotePath).Str("status", *exitStat).Msg("Download status")
 			}
 			if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
 				"local_path":          rec.RemotePath,
@@ -713,11 +714,11 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 				"sync_status":         "synced",
 				"last_synced":         now,
 			}); updateErr != nil {
-				fmt.Printf("[WARN] DB update for %s: %v\n", rec.RemotePath, updateErr)
+				log.Warn().Err(updateErr).Str("path", rec.RemotePath).Msg("DB update failed")
 			}
 		} else {
 			// Local is more recent: upload a new version to remote.
-			fmt.Printf("[INFO] Local version is more recent for %s; uploading update\n", rec.LocalPath)
+			log.Info().Str("path", rec.LocalPath).Msg("Local version is more recent; uploading update")
 			parentPath := path.Dir(rec.LocalPath)
 			parentNodeID := "LOCAL_ROOT"
 			if parentPath != "." {
@@ -726,7 +727,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 				} else {
 					parentRec, dbErr := cacheDb.QueryFolderByPath(parentPath)
 					if dbErr != nil {
-						fmt.Printf("[ERROR] failed to query parent folder %s: %v\n", parentPath, dbErr)
+						log.Error().Err(dbErr).Str("parentPath", parentPath).Msg("Querying parent folder failed")
 					}
 					if parentRec != nil && parentRec.NodeID != "" {
 						parentNodeID = parentRec.NodeID
@@ -738,10 +739,10 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 			nodeIDStr := rec.NodeID
 			uploadedNodeID, uploadErr := carbonioAuth.UploadFile(authToken, parentNodeID, filePath, true, false, &nodeIDStr)
 			if uploadErr != nil {
-				fmt.Printf("[ERROR] uploading new version %s: %v\n", rec.LocalPath, uploadErr)
+				log.Error().Err(uploadErr).Str("path", rec.LocalPath).Msg("Uploading new version failed")
 				continue
 			}
-			fmt.Printf("[INFO] Uploaded new version: %s (nodeId: %s)\n", rec.LocalPath, uploadedNodeID)
+			log.Info().Str("path", rec.LocalPath).Str("nodeId", uploadedNodeID).Msg("Uploaded new version")
 			if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
 				"remote_size":          rec.LocalSize,
 				"remote_digest":        rec.LocalDigest,
@@ -749,7 +750,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 				"sync_status":          "synced",
 				"last_synced":          now,
 			}); updateErr != nil {
-				fmt.Printf("[WARN] DB update for %s: %v\n", rec.LocalPath, updateErr)
+				log.Warn().Err(updateErr).Str("path", rec.LocalPath).Msg("DB update failed")
 			}
 		}
 	}
@@ -757,10 +758,10 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 	// --- Delete local items whose remote counterpart has been deleted ---
 	remoteDeleted, err := cacheDb.QueryRemoteDeleted()
 	if err != nil {
-		fmt.Println("Error querying remote deleted:", err)
+		log.Error().Err(err).Msg("Querying remote deleted failed")
 		return err
 	}
-	fmt.Printf("[INFO] Found %d remote deleted items to clean up locally\n", len(remoteDeleted))
+	log.Info().Int("count", len(remoteDeleted)).Msg("Found remote deleted items to clean up locally")
 
 	// Process deepest paths first so child files/dirs are removed before their parents.
 	sort.Slice(remoteDeleted, func(i, j int) bool {
@@ -782,29 +783,29 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 		}
 		if removeErr != nil {
 			if !os.IsNotExist(removeErr) {
-				fmt.Printf("[ERROR] removing local %s: %v\n", localItemPath, removeErr)
+				log.Error().Err(removeErr).Str("path", localItemPath).Msg("Removing local item failed")
 				continue
 			}
 			// File already absent locally – still update the DB record.
 		} else {
-			fmt.Printf("[INFO] Deleted local item (remote was deleted): %s\n", localItemPath)
+			log.Info().Str("path", localItemPath).Msg("Deleted local item (remote was deleted)")
 		}
 		if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
 			"local_deleted": 1,
 			"sync_status":   "remote_deleted",
 			"last_synced":   now,
 		}); updateErr != nil {
-			fmt.Printf("[WARN] DB update for %s: %v\n", rec.LocalPath, updateErr)
+			log.Warn().Err(updateErr).Str("path", rec.LocalPath).Msg("DB update failed")
 		}
 	}
 
 	// --- Trash remote items whose local counterpart has been deleted ---
 	localDeleted, err := cacheDb.QueryLocalDeleted()
 	if err != nil {
-		fmt.Println("Error querying local deleted:", err)
+		log.Error().Err(err).Msg("Querying local deleted failed")
 		return err
 	}
-	fmt.Printf("[INFO] Found %d locally deleted items to remove from remote\n", len(localDeleted))
+	log.Info().Int("count", len(localDeleted)).Msg("Found locally deleted items to remove from remote")
 
 	// Process deepest paths first so child files/dirs are removed before their parents.
 	sort.Slice(localDeleted, func(i, j int) bool {
@@ -819,19 +820,19 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 	for _, rec := range localDeleted {
 		_, trashErr := graphqlAuthenticator.TrashNodes([]string{rec.NodeID})
 		if trashErr != nil {
-			fmt.Printf("[ERROR] trashing remote %s (nodeId: %s): %v\n", rec.RemotePath, rec.NodeID, trashErr)
+			log.Error().Err(trashErr).Str("path", rec.RemotePath).Str("nodeId", rec.NodeID).Msg("Trashing remote item failed")
 			continue
 		}
-		fmt.Printf("[INFO] Trashed remote item (local was deleted): %s\n", rec.RemotePath)
+		log.Info().Str("path", rec.RemotePath).Msg("Trashed remote item (local was deleted)")
 		if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
 			"remote_deleted": 1,
 			"sync_status":    "local_deleted",
 			"last_synced":    now,
 		}); updateErr != nil {
-			fmt.Printf("[WARN] DB update for %s: %v\n", rec.RemotePath, updateErr)
+			log.Warn().Err(updateErr).Str("path", rec.RemotePath).Msg("DB update failed")
 		}
 	}
 
-	fmt.Println("[INFO] liveCacheSync completed.")
+	log.Info().Msg("liveCacheSync completed")
 	return nil
 }
