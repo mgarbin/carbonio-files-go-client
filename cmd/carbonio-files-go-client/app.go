@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	sqlitecache "carbonio-files-go-client/pkg/sqlite"
 
 	"github.com/rs/zerolog/log"
+	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // App is the Wails-bound backend for the desktop GUI. Every exported method
@@ -47,6 +49,10 @@ type LoginResult struct {
 	ErrorDetail string `json:"errorDetail"`
 	Endpoint    string `json:"endpoint"`
 	Username    string `json:"username"`
+	// NeedsSyncSetup is true on a successful login when no sync folder has
+	// been configured yet, so the frontend must show the configuration
+	// wizard (folder picker) before entering the dashboard.
+	NeedsSyncSetup bool `json:"needsSyncSetup"`
 }
 
 // InitialState is returned once by Init when the frontend starts up.
@@ -177,6 +183,140 @@ func (a *App) UpdateLoggingConfig(level, format, output, path string) error {
 	return a.applyLoggingConfig(level, format, output, path)
 }
 
+// ChooseLogFolder opens the native OS directory picker (the same
+// per-OS chooser used by ChooseSyncFolder) so the user can pick where the
+// log file should live, and returns the resulting full log file path: the
+// chosen folder joined with currentPath's file name, or the built-in
+// default file name (see logger.DefaultPath) if currentPath is empty. An
+// empty string with a nil error means the user cancelled the dialog.
+func (a *App) ChooseLogFolder(currentPath string) (string, error) {
+	dir, err := wailsruntime.OpenDirectoryDialog(a.ctx, wailsruntime.OpenDialogOptions{
+		Title:                "Select the folder for the log file",
+		DefaultDirectory:     logFolderStartDir(currentPath),
+		CanCreateDirectories: true,
+	})
+	if err != nil {
+		return "", err
+	}
+	if dir == "" {
+		return "", nil
+	}
+	return filepath.Join(dir, logFileName(currentPath)), nil
+}
+
+// logFolderStartDir picks the directory to seed ChooseLogFolder's native
+// picker with: currentPath's own directory if it exists on disk, else
+// startingDirectory()'s fallback. Like startingDirectory, it must never
+// return a path that doesn't exist (see OpenDirectoryDialog's hard error on
+// a missing DefaultDirectory).
+func logFolderStartDir(currentPath string) string {
+	if currentPath != "" {
+		if dir := filepath.Dir(currentPath); dir != "." {
+			if info, err := os.Stat(dir); err == nil && info.IsDir() {
+				return dir
+			}
+		}
+	}
+	return startingDirectory()
+}
+
+// logFileName returns the file name to keep when the user picks a new
+// folder for the log file: currentPath's own base name, or the built-in
+// default (see logger.DefaultPath) when currentPath is empty or has no
+// meaningful base name of its own.
+func logFileName(currentPath string) string {
+	if currentPath != "" {
+		if name := filepath.Base(currentPath); name != "." && name != string(filepath.Separator) {
+			return name
+		}
+	}
+	return filepath.Base(logger.DefaultPath)
+}
+
+// SyncFolderSettings mirrors the files_local_folder field of
+// sqlitecache.ConfigRecord as a small DTO for the frontend.
+type SyncFolderSettings struct {
+	// Path is the local folder used to sync remote files. Empty means no
+	// folder has been configured yet: the frontend must run the setup
+	// wizard before entering the dashboard.
+	Path string `json:"path"`
+}
+
+// startingDirectory returns a directory known to exist on disk, to seed the
+// native folder picker's initial location. OpenDirectoryDialog errors out
+// immediately if DefaultDirectory is set but doesn't exist - so this must
+// never return a path that isn't already present (e.g. a suggested
+// "~/Carbonio Files" target the user hasn't created yet). Falls back to ""
+// (no default) if even the home directory can't be resolved/statted.
+func startingDirectory() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	if info, err := os.Stat(home); err != nil || !info.IsDir() {
+		return ""
+	}
+	return home
+}
+
+// GetSyncFolder returns the persisted sync folder, or an empty Path if none
+// has been configured yet (e.g. before the first login, or before the setup
+// wizard has run).
+func (a *App) GetSyncFolder() SyncFolderSettings {
+	if a.db == nil {
+		return SyncFolderSettings{}
+	}
+	cfg, err := a.db.GetConfig()
+	if err != nil || cfg == nil {
+		return SyncFolderSettings{}
+	}
+	return SyncFolderSettings{Path: cfg.FilesLocalFolder}
+}
+
+// ChooseSyncFolder opens the native OS directory picker (Explorer on
+// Windows, Finder on macOS, the desktop's file chooser - typically GTK - on
+// Linux; Wails selects the right one for the host OS at runtime) and
+// returns the chosen absolute path. An empty string with a nil error means
+// the user cancelled the dialog.
+func (a *App) ChooseSyncFolder() (string, error) {
+	dir, err := wailsruntime.OpenDirectoryDialog(a.ctx, wailsruntime.OpenDialogOptions{
+		Title:                "Select the folder to sync your Carbonio Files",
+		DefaultDirectory:     startingDirectory(),
+		CanCreateDirectories: true,
+	})
+	if err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+// SetSyncFolder persists path as the sync folder, creating it on disk if it
+// doesn't exist yet. It requires a prior successful login: the sync folder
+// lives in the same singleton config row as the credentials (see
+// pkg/sqlite ConfigRecord), so there is nowhere to store it until that row
+// exists.
+func (a *App) SetSyncFolder(path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return errors.New("sync folder path cannot be empty")
+	}
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return fmt.Errorf("cannot create sync folder %q: %w", path, err)
+	}
+	if a.db == nil {
+		return errors.New("credential store unavailable")
+	}
+	cfg, err := a.db.GetConfig()
+	if err != nil {
+		return err
+	}
+	if cfg == nil {
+		return errors.New("log in first: the sync folder is stored alongside your saved credentials")
+	}
+	cfg.FilesLocalFolder = path
+	return a.db.UpdateConfig(*cfg)
+}
+
 // configDBPath returns the per-user path of the GUI's encrypted credential
 // store, independent of the process' current working directory.
 func configDBPath() (string, error) {
@@ -219,48 +359,74 @@ func (a *App) Login(endpoint, username, password string) LoginResult {
 	return a.login(endpoint, username, password)
 }
 
-func (a *App) login(endpoint, username, password string) LoginResult {
+// TestLogin verifies endpoint/username/password against the Carbonio auth
+// endpoint without persisting anything or touching the active session. It
+// backs the Authentication preferences panel's "Test connection" button:
+// Save is only enabled once this reports success for the exact values the
+// user is about to save.
+func (a *App) TestLogin(endpoint, username, password string) LoginResult {
+	_, result := authenticate(&carbonio.HTTPAuthenticator{}, endpoint, username, password)
+	return result
+}
+
+// authenticate runs the Carbonio login handshake against endpoint and
+// classifies the outcome into a LoginResult (Success + normalized
+// Endpoint/Username on success, ErrorKind/ErrorDetail on failure). On
+// success it also returns the auth token. Shared by login() (which
+// additionally persists credentials and updates the session) and
+// TestLogin() (which does neither).
+func authenticate(auth *carbonio.HTTPAuthenticator, endpoint, username, password string) (string, LoginResult) {
 	endpoint = strings.TrimSpace(endpoint)
 	username = strings.TrimSpace(username)
 
 	if endpoint == "" || username == "" || password == "" {
-		return LoginResult{ErrorKind: string(carbonio.AuthErrorInvalidInput), Endpoint: endpoint, Username: username}
+		return "", LoginResult{ErrorKind: string(carbonio.AuthErrorInvalidInput), Endpoint: endpoint, Username: username}
 	}
 
-	a.auth.Endpoint = endpoint
-	token, err := a.auth.CarbonioZxAuth(username, password)
+	auth.Endpoint = endpoint
+	token, err := auth.CarbonioZxAuth(username, password)
 	if err != nil {
 		result := LoginResult{ErrorKind: string(carbonio.AuthErrorUnknown), ErrorDetail: err.Error(), Endpoint: endpoint, Username: username}
 		var authErr *carbonio.AuthError
 		if errors.As(err, &authErr) {
 			result.ErrorKind = string(authErr.Kind)
 		}
+		return "", result
+	}
+	return *token, LoginResult{Success: true, Endpoint: endpoint, Username: username}
+}
+
+func (a *App) login(endpoint, username, password string) LoginResult {
+	token, result := authenticate(a.auth, endpoint, username, password)
+	if !result.Success {
 		return result
 	}
 
-	a.session = Session{LoggedIn: true, Endpoint: endpoint, Username: username, Token: *token}
+	a.session = Session{LoggedIn: true, Endpoint: result.Endpoint, Username: result.Username, Token: token}
 
 	if a.db != nil {
 		record := sqlitecache.ConfigRecord{
-			Endpoint: endpoint,
-			Username: username,
+			Endpoint: result.Endpoint,
+			Username: result.Username,
 			Password: password,
 		}
-		// Preserve any previously saved logging settings: UpsertConfig
-		// replaces the whole singleton row, and a plain login should never
-		// silently reset them to defaults.
+		// Preserve any previously saved logging settings and sync folder:
+		// UpsertConfig replaces the whole singleton row, and a plain login
+		// should never silently reset them to defaults.
 		if existing, err := a.db.GetConfig(); err == nil && existing != nil {
 			record.LogLevel = existing.LogLevel
 			record.LogFormat = existing.LogFormat
 			record.LogOutput = existing.LogOutput
 			record.LogPath = existing.LogPath
+			record.FilesLocalFolder = existing.FilesLocalFolder
 		}
 		if err := a.db.UpsertConfig(record); err != nil {
 			log.Error().Err(err).Msg("[gui] cannot save credentials")
 		}
+		result.NeedsSyncSetup = record.FilesLocalFolder == ""
 	}
 
-	return LoginResult{Success: true, Endpoint: endpoint, Username: username}
+	return result
 }
 
 // GetSession returns the currently authenticated user, or a zero Session if

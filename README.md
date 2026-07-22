@@ -42,7 +42,11 @@ Running the binary with **no arguments** opens the desktop GUI (built with [Wail
   | Server unreachable (DNS/connection/TLS/timeout) | "Could not reach the server..." |
   | Server error (HTTP 5xx) | "The server is currently unavailable..." |
 
-- **Dashboard**: after login, a sidebar menu gives access to the Dashboard and, under **Preferences**, **Authentication** — showing the connected server/username with a **Log out** button that clears the in-memory session and removes the saved credentials.
+- **First-login setup wizard**: right after the first successful login (when no sync folder has been configured yet), the app shows a wizard screen prompting you to pick the local folder to sync files into, using the **native OS folder picker** (Explorer on Windows, Finder on macOS, the desktop's file chooser on Linux). The choice is saved to the same SQLite config row as the credentials and the folder is created if missing; you're then taken to the dashboard. Subsequent logins skip the wizard.
+- **Dashboard**: after login (and, on first login, after the setup wizard), a sidebar menu gives access to the Dashboard and, under **Preferences**:
+  - **Authentication** — edit the **server**, **username**, and **password** and click **Test connection** to verify them against the server without saving anything. Test connection is enabled only once you've changed at least one field; Save is enabled only after a test succeeds for the exact values currently in the form (any further edit re-locks Save until you test again). A **Log out** button clears the in-memory session and removes the saved credentials.
+  - **Sync folder** — shows the currently configured local sync folder and a **Change folder…** button that reopens the native OS folder picker and persists the new choice.
+  - **Logging** — lets you change the log **level** (trace…disabled), **format** (console/JSON), and **output** (console/file/both, with a file path field), applied immediately and persisted for future launches.
 
 ### Building/running with the Wails CLI (optional)
 
@@ -250,8 +254,8 @@ file's parent directory is created automatically if it doesn't exist.
 The [desktop GUI](#desktop-gui) has no CLI flags; instead its logging settings
 are persisted in the same encrypted SQLite config row as the saved
 credentials (see [Configuration storage (SQLite)](#configuration-storage-sqlite)),
-read on startup, and can be changed at runtime through the `App.GetLoggingConfig`
-/ `App.UpdateLoggingConfig` Wails-bound methods.
+read on startup, editable from **Preferences > Logging**, and backed by the
+`App.GetLoggingConfig` / `App.UpdateLoggingConfig` Wails-bound methods.
 
 ## Project structure
 
@@ -262,8 +266,8 @@ carbonio-files-go-client/
 ├── cmd/
 │   └── carbonio-files-go-client/
 │       ├── main.go              # Entry point: dispatches to GUI (default) or CLI (-cli)
-│       ├── app.go               # Wails-bound GUI backend (login, session, auto-login)
-│       ├── app_test.go          # GUI login/persist/auto-login/logout tests
+│       ├── app.go               # Wails-bound GUI backend (login, credential test/save, sync-folder wizard, logging prefs)
+│       ├── app_test.go          # GUI login/persist/auto-login/logout/sync-folder/credential-test tests
 │       ├── wails.json           # Wails project config
 │       └── frontend/dist/       # Plain HTML/CSS/JS GUI (no JS build step)
 ├── pkg/

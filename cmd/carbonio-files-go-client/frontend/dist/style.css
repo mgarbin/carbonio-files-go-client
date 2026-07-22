@@ -8,7 +8,7 @@
   --text: #1a202c;
   --muted: #64748b;
   --danger: #c0392b;
-  --radius: 10px;
+  --success: #1f8a4c;
 }
 
 * {
@@ -244,4 +244,69 @@ body {
 
 .panel-actions {
   margin-top: 20px;
+  display: flex;
+  gap: 10px;
+}
+
+.panel-actions .btn-primary {
+  width: auto;
+}
+
+.field select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+  background: #fff;
+  color: var(--text);
+}
+
+.field select:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(43, 108, 176, 0.15);
+}
+
+.success-banner {
+  background: #eafaf1;
+  border: 1px solid #b7e4c7;
+  color: var(--success);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.folder-picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 20px 0;
+}
+
+.folder-path {
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 13px;
+  color: var(--text);
+  word-break: break-all;
+}
+
+.folder-path.placeholder {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.path-picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.path-picker input {
+  flex: 1;
 }
