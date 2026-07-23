@@ -350,8 +350,32 @@ func (a *App) Init() InitialState {
 	}
 
 	state.AttemptedAutoLogin = true
-	state.AutoLogin = a.login(cfg.Endpoint, cfg.Username, cfg.Password)
+	state.AutoLogin = a.autoLogin(cfg)
 	return state
+}
+
+// autoLogin signs the user back in using the credentials saved from a
+// previous session, reusing cfg.AuthToken as-is when the server still
+// accepts it (see carbonio.Session.Login): no password is sent to the
+// server in that case. A fresh username/password login - persisting the
+// refreshed token - happens only when the cached token is missing or the
+// server rejects it. This is the CLI's loginWithCachedToken, shared via
+// carbonio.Session so both share the exact same reuse/refresh policy.
+func (a *App) autoLogin(cfg *sqlitecache.ConfigRecord) LoginResult {
+	a.auth.Endpoint = cfg.Endpoint
+	session := carbonio.NewSession(a.auth, a.db, cfg.Username, cfg.Password)
+	token, err := session.Login()
+	if err != nil {
+		result := LoginResult{ErrorKind: string(carbonio.AuthErrorUnknown), ErrorDetail: err.Error(), Endpoint: cfg.Endpoint, Username: cfg.Username}
+		var authErr *carbonio.AuthError
+		if errors.As(err, &authErr) {
+			result.ErrorKind = string(authErr.Kind)
+		}
+		return result
+	}
+
+	a.session = Session{LoggedIn: true, Endpoint: cfg.Endpoint, Username: cfg.Username, Token: token}
+	return LoginResult{Success: true, Endpoint: cfg.Endpoint, Username: cfg.Username, NeedsSyncSetup: cfg.FilesLocalFolder == ""}
 }
 
 // Login authenticates against endpoint with username/password. On success
@@ -400,35 +424,37 @@ func authenticate(auth *carbonio.HTTPAuthenticator, endpoint, username, password
 }
 
 func (a *App) login(endpoint, username, password string) LoginResult {
-	token, result := authenticate(a.auth, endpoint, username, password)
-	if !result.Success {
+	endpoint = strings.TrimSpace(endpoint)
+	username = strings.TrimSpace(username)
+
+	if endpoint == "" || username == "" || password == "" {
+		return LoginResult{ErrorKind: string(carbonio.AuthErrorInvalidInput), Endpoint: endpoint, Username: username}
+	}
+
+	a.auth.Endpoint = endpoint
+	session := carbonio.NewSession(a.auth, a.db, username, password)
+	// A manual login always re-authenticates with the credentials the user
+	// just typed instead of reusing/validating any previously cached
+	// token: the whole point of this call is to check those exact values,
+	// and it persists whatever token that produces for future auto-login.
+	token, err := session.Reauthenticate()
+	if err != nil {
+		result := LoginResult{ErrorKind: string(carbonio.AuthErrorUnknown), ErrorDetail: err.Error(), Endpoint: endpoint, Username: username}
+		var authErr *carbonio.AuthError
+		if errors.As(err, &authErr) {
+			result.ErrorKind = string(authErr.Kind)
+		}
 		return result
 	}
 
-	a.session = Session{LoggedIn: true, Endpoint: result.Endpoint, Username: result.Username, Token: token}
+	a.session = Session{LoggedIn: true, Endpoint: endpoint, Username: username, Token: token}
 
+	result := LoginResult{Success: true, Endpoint: endpoint, Username: username}
 	if a.db != nil {
-		record := sqlitecache.ConfigRecord{
-			Endpoint: result.Endpoint,
-			Username: result.Username,
-			Password: password,
+		if cfg, err := a.db.GetConfig(); err == nil && cfg != nil {
+			result.NeedsSyncSetup = cfg.FilesLocalFolder == ""
 		}
-		// Preserve any previously saved logging settings and sync folder:
-		// UpsertConfig replaces the whole singleton row, and a plain login
-		// should never silently reset them to defaults.
-		if existing, err := a.db.GetConfig(); err == nil && existing != nil {
-			record.LogLevel = existing.LogLevel
-			record.LogFormat = existing.LogFormat
-			record.LogOutput = existing.LogOutput
-			record.LogPath = existing.LogPath
-			record.FilesLocalFolder = existing.FilesLocalFolder
-		}
-		if err := a.db.UpsertConfig(record); err != nil {
-			log.Error().Err(err).Msg("[gui] cannot save credentials")
-		}
-		result.NeedsSyncSetup = record.FilesLocalFolder == ""
 	}
-
 	return result
 }
 

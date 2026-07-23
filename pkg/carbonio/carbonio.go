@@ -282,6 +282,61 @@ func (a *HTTPAuthenticator) CarbonioZxAuth(email, password string) (*string, err
 	}
 }
 
+// TokenStatus classifies the outcome of ValidateToken.
+type TokenStatus string
+
+const (
+	// TokenValid means the server still accepts the token as-is.
+	TokenValid TokenStatus = "valid"
+	// TokenInvalid means the server no longer accepts the token (expired,
+	// deregistered/logged out elsewhere, or malformed): the caller must
+	// fall back to a full username/password login.
+	TokenInvalid TokenStatus = "invalid"
+)
+
+// ValidateToken checks whether token is still accepted by the server,
+// without performing a full username/password login. It calls
+// GET /zx/auth/v2/myself - the same versioned endpoint /zx/auth/v2/login
+// lives under - passing token as the ZM_AUTH_TOKEN cookie. Carbonio's
+// AuthorizedApiHandler (see carbonio-auth's MyselfAuthHandler) maps every
+// reason a token stops being usable (expired, deregistered, malformed) to
+// a bare 401 with no body, so a 401 here is the correct, and only, signal
+// to fall back to a fresh login; anything else (network error, 5xx, ...)
+// is returned as an error and must not be treated as "invalid".
+func (a *HTTPAuthenticator) ValidateToken(token string) (TokenStatus, error) {
+	if token == "" {
+		return TokenInvalid, nil
+	}
+
+	req, err := http.NewRequest("GET", "https://"+a.Endpoint+"/zx/auth/v2/myself", nil)
+	if err != nil {
+		return "", &AuthError{Kind: AuthErrorUnknown, Detail: err.Error()}
+	}
+	req.Header.Set("Cookie", fmt.Sprintf("ZM_AUTH_TOKEN=%s", token))
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+		Timeout: 5 * time.Second,
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", &AuthError{Kind: AuthErrorNetwork, Detail: err.Error()}
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return TokenValid, nil
+	case http.StatusUnauthorized:
+		return TokenInvalid, nil
+	default:
+		return "", &AuthError{Kind: AuthErrorUnknown, StatusCode: resp.StatusCode, Detail: fmt.Sprintf("unexpected status validating token: %d", resp.StatusCode)}
+	}
+}
+
 func (a *HTTPAuthenticator) DownloadFile(token, nodeId, destPath, fileName string, fileSize int64, maxRetries int, wg *sync.WaitGroup, sem chan struct{}) (*string, error) {
 	dialer := &net.Dialer{
 		Timeout: 5 * time.Second, // Only dial (connection) timeout

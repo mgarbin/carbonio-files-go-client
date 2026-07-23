@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"carbonio-files-go-client/pkg/carbonio"
@@ -329,5 +330,114 @@ func TestApp_TestLoginDoesNotPersistOrTouchSession(t *testing.T) {
 	}
 	if cfg == nil || cfg.Password != pass {
 		t.Fatalf("GetConfig() = %+v, want the originally saved password untouched by TestLogin()", cfg)
+	}
+}
+
+// newTokenAwareFakeCarbonioServer extends newFakeCarbonioServer with a
+// /zx/auth/v2/myself endpoint: it accepts validToken as the ZM_AUTH_TOKEN
+// cookie while *tokenValid holds true, and rejects every token (mirroring
+// the server declaring it no longer suitable) once flipped to false. It
+// also returns a counter of /login requests so tests can assert whether a
+// cached token was reused instead of a password round-trip.
+func newTokenAwareFakeCarbonioServer(t *testing.T, validUser, validPass, validToken string, tokenValid *atomic.Bool) (endpoint string, loginCalls *atomic.Int32) {
+	t.Helper()
+	loginCalls = &atomic.Int32{}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/zx/auth/v2/login", func(w http.ResponseWriter, r *http.Request) {
+		loginCalls.Add(1)
+		var payload struct {
+			User     string `json:"user"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if payload.User != validUser || payload.Password != validPass {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		http.SetCookie(w, &http.Cookie{Name: "ZM_AUTH_TOKEN", Value: validToken})
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/zx/auth/v2/myself", func(w http.ResponseWriter, r *http.Request) {
+		cookie, err := r.Cookie("ZM_AUTH_TOKEN")
+		if !tokenValid.Load() || err != nil || cookie.Value != validToken {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	srv := httptest.NewTLSServer(mux)
+	t.Cleanup(srv.Close)
+	return strings.TrimPrefix(srv.URL, "https://"), loginCalls
+}
+
+// TestApp_InitReusesCachedTokenWithoutPasswordLogin verifies the auto-login
+// path added on top of TestApp_LoginPersistsCredentialsForAutoLogin: once a
+// token has been cached, restarting the app and calling Init() must sign
+// the user back in by reusing that token - validated against
+// /zx/auth/v2/myself - without ever POSTing the password to /login again.
+func TestApp_InitReusesCachedTokenWithoutPasswordLogin(t *testing.T) {
+	const user, pass = "user@example.com", "s3cret"
+	tokenValid := &atomic.Bool{}
+	tokenValid.Store(true)
+	endpoint, loginCalls := newTokenAwareFakeCarbonioServer(t, user, pass, "tok-cached", tokenValid)
+	dbPath := filepath.Join(t.TempDir(), "gui-config.db")
+
+	app1 := openTestApp(t, dbPath)
+	if result := app1.Login(endpoint, user, pass); !result.Success {
+		t.Fatalf("Login() = %+v, want Success=true", result)
+	}
+	app1.db.Close()
+	if got := loginCalls.Load(); got != 1 {
+		t.Fatalf("login endpoint called %d times after first Login(), want 1", got)
+	}
+
+	// Simulate reopening the app: fresh App/db pointed at the same file.
+	app2 := openTestApp(t, dbPath)
+	defer app2.db.Close()
+	state := app2.Init()
+	if !state.AutoLogin.Success {
+		t.Fatalf("Init() AutoLogin = %+v, want Success=true", state.AutoLogin)
+	}
+	if got := app2.GetSession(); !got.LoggedIn || got.Username != user {
+		t.Fatalf("GetSession() after auto-login = %+v, want logged in as %s", got, user)
+	}
+	if got := loginCalls.Load(); got != 1 {
+		t.Fatalf("login endpoint called %d times after Init(), want still 1 (the cached token must be reused, not the password)", got)
+	}
+}
+
+// TestApp_InitReauthenticatesWhenServerRejectsCachedToken covers the other
+// half of the policy: once the server stops accepting the cached token
+// (expired, revoked, ...), Init() must transparently fall back to a full
+// username/password login and persist the refreshed token.
+func TestApp_InitReauthenticatesWhenServerRejectsCachedToken(t *testing.T) {
+	const user, pass = "user@example.com", "s3cret"
+	tokenValid := &atomic.Bool{}
+	tokenValid.Store(true)
+	endpoint, loginCalls := newTokenAwareFakeCarbonioServer(t, user, pass, "tok-cached", tokenValid)
+	dbPath := filepath.Join(t.TempDir(), "gui-config.db")
+
+	app1 := openTestApp(t, dbPath)
+	if result := app1.Login(endpoint, user, pass); !result.Success {
+		t.Fatalf("Login() = %+v, want Success=true", result)
+	}
+	app1.db.Close()
+
+	// The server now declares the cached token no longer suitable.
+	tokenValid.Store(false)
+
+	app2 := openTestApp(t, dbPath)
+	defer app2.db.Close()
+	state := app2.Init()
+	if !state.AutoLogin.Success {
+		t.Fatalf("Init() AutoLogin = %+v, want Success=true (must re-authenticate automatically)", state.AutoLogin)
+	}
+	if got := loginCalls.Load(); got != 2 {
+		t.Fatalf("login endpoint called %d times, want 2 (initial Login() plus the automatic re-login)", got)
 	}
 }

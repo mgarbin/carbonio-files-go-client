@@ -106,3 +106,68 @@ func assertKind(t *testing.T, err error, want AuthErrorKind) {
 		t.Fatalf("error kind = %q, want %q (err: %v)", authErr.Kind, want, err)
 	}
 }
+
+func TestValidateToken_Valid(t *testing.T) {
+	endpoint := newAuthTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/zx/auth/v2/myself" {
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+		cookie, err := r.Cookie("ZM_AUTH_TOKEN")
+		if err != nil || cookie.Value != "tok-123" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	auth := &HTTPAuthenticator{Endpoint: endpoint}
+	status, err := auth.ValidateToken("tok-123")
+	if err != nil {
+		t.Fatalf("ValidateToken() error = %v, want nil", err)
+	}
+	if status != TokenValid {
+		t.Fatalf("ValidateToken() status = %q, want %q", status, TokenValid)
+	}
+}
+
+func TestValidateToken_Invalid(t *testing.T) {
+	endpoint := newAuthTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+
+	auth := &HTTPAuthenticator{Endpoint: endpoint}
+	status, err := auth.ValidateToken("tok-expired")
+	if err != nil {
+		t.Fatalf("ValidateToken() error = %v, want nil", err)
+	}
+	if status != TokenInvalid {
+		t.Fatalf("ValidateToken() status = %q, want %q", status, TokenInvalid)
+	}
+}
+
+func TestValidateToken_EmptyTokenIsInvalidWithoutARequest(t *testing.T) {
+	auth := &HTTPAuthenticator{Endpoint: "unused.invalid"}
+	status, err := auth.ValidateToken("")
+	if err != nil {
+		t.Fatalf("ValidateToken(\"\") error = %v, want nil", err)
+	}
+	if status != TokenInvalid {
+		t.Fatalf("ValidateToken(\"\") status = %q, want %q", status, TokenInvalid)
+	}
+}
+
+func TestValidateToken_UnexpectedStatusIsAnError(t *testing.T) {
+	endpoint := newAuthTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	auth := &HTTPAuthenticator{Endpoint: endpoint}
+	_, err := auth.ValidateToken("tok-123")
+	assertKind(t, err, AuthErrorUnknown)
+}
+
+func TestValidateToken_NetworkError(t *testing.T) {
+	auth := &HTTPAuthenticator{Endpoint: "127.0.0.1:1"}
+	_, err := auth.ValidateToken("tok-123")
+	assertKind(t, err, AuthErrorNetwork)
+}

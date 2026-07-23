@@ -19,7 +19,16 @@ Logging:
 #  path: "logs/carbonio-files-go-client.log"  # log file path, used when output is "file" or "both"
 ```
 
-When `AuthToken` is provided, the username/password login step is skipped and the token is used directly.
+When `AuthToken` is set in `config.yaml`, it is used verbatim and neither the
+cached-token store nor the login step ever runs - use this only for a
+token you manage yourself. Leave it unset (the default) to get automatic
+token caching instead: the first run logs in with `username`/`password` and
+saves the resulting `ZM_AUTH_TOKEN` encrypted at rest in
+`./file_sync_cache.db` (see [Configuration storage (SQLite)](configuration-storage-sqlite.md));
+every following run reuses that token - skipping the password login
+entirely - for as long as the server keeps accepting it, and transparently
+re-authenticates with `username`/`password` (persisting the refreshed
+token) the moment the server reports it no longer is.
 
 Every `Logging` field is optional and overridable from the command line (see
 [Logging](logging.md) below); the `Logging` block itself may be omitted entirely

@@ -8,9 +8,24 @@ singleton `config` table (`id` is always `1`). `Password` and `AuthToken` are
 encrypted at rest with AES-256-GCM before being written; every other field
 (`endpoint`, `username`, `files_local_folder`, `log_level`, `log_format`,
 `log_output`, `log_path`) is stored as plain text. This is
-exactly the mechanism the [desktop GUI](desktop-gui.md) uses to remember your
-login across launches (in its own `gui-config.db`, independent from the CLI's
-`./file_sync_cache.db`).
+exactly the mechanism both the [CLI](usage.md) (`./file_sync_cache.db`) and
+the [desktop GUI](desktop-gui.md) (its own `gui-config.db`) use to remember
+your login across runs/launches and to cache the `ZM_AUTH_TOKEN`.
+
+`AuthToken` specifically is managed by `carbonio.Session`
+(`pkg/carbonio/session.go`), shared by the CLI and the GUI:
+
+- `Session.Login()` reads the stored token and calls
+  `HTTPAuthenticator.ValidateToken` (`GET /zx/auth/v2/myself` with the token
+  as the `ZM_AUTH_TOKEN` cookie) before trusting it. A `200` means the
+  token is reused as-is - no password round-trip. A `401` (or no stored
+  token) means the server no longer accepts it, so `Login()` falls back to
+  a full `username`/`password` login via `CarbonioZxAuth` and persists the
+  fresh token for the next call to reuse.
+- `Session.Reauthenticate()` skips the cached-token check and always
+  performs a fresh password login (used by the GUI's explicit "Login" and
+  "Test connection" actions, where the whole point is to check the exact
+  credentials just typed).
 
 The AES-256 key is generated on first use and stored next to the database as
 `<dbPath>.key` with `0600` permissions, kept separate from the `.db` file so a
