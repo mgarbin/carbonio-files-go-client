@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/andybalholm/brotli"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -78,6 +80,24 @@ func (e *AuthError) Error() string {
 		return fmt.Sprintf("carbonio auth error [%s]: %s (HTTP %d)", e.Kind, e.Detail, e.StatusCode)
 	}
 	return fmt.Sprintf("carbonio auth error [%s]: %s", e.Kind, e.Detail)
+}
+
+// logWithAuthError attaches err to a zerolog event and, when err is an
+// *AuthError (the type every carbonio auth call returns on failure), adds
+// its Kind and, if present, the HTTP StatusCode the server responded with
+// as their own structured fields. Str/Int fields are queryable in JSON log
+// output, so callers no longer have to parse AuthError.Error()'s formatted
+// string to see exactly what the server sent back.
+func logWithAuthError(ev *zerolog.Event, err error) *zerolog.Event {
+	ev = ev.Err(err)
+	var authErr *AuthError
+	if errors.As(err, &authErr) {
+		ev = ev.Str("authErrorKind", string(authErr.Kind))
+		if authErr.StatusCode != 0 {
+			ev = ev.Int("statusCode", authErr.StatusCode)
+		}
+	}
+	return ev
 }
 
 type HTTPAuthenticator struct {
@@ -308,6 +328,8 @@ func (a *HTTPAuthenticator) ValidateToken(token string) (TokenStatus, error) {
 		return TokenInvalid, nil
 	}
 
+	log.Debug().Str("endpoint", a.Endpoint).Msg("[auth] validating cached auth token against server")
+
 	req, err := http.NewRequest("GET", "https://"+a.Endpoint+"/zx/auth/v2/myself", nil)
 	if err != nil {
 		return "", &AuthError{Kind: AuthErrorUnknown, Detail: err.Error()}
@@ -323,16 +345,24 @@ func (a *HTTPAuthenticator) ValidateToken(token string) (TokenStatus, error) {
 
 	resp, err := client.Do(req)
 	if err != nil {
+		log.Warn().Err(err).Str("endpoint", a.Endpoint).Msg("[auth] cached auth token validation request failed")
 		return "", &AuthError{Kind: AuthErrorNetwork, Detail: err.Error()}
 	}
 	defer resp.Body.Close()
 
 	switch resp.StatusCode {
 	case http.StatusOK:
+		log.Debug().Msg("[auth] server accepted cached auth token")
 		return TokenValid, nil
 	case http.StatusUnauthorized:
+		log.Debug().Msg("[auth] server rejected cached auth token with 401, it is no longer usable")
 		return TokenInvalid, nil
 	default:
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		log.Warn().
+			Int("statusCode", resp.StatusCode).
+			Str("body", string(body)).
+			Msg("[auth] server returned an unexpected status validating the cached auth token")
 		return "", &AuthError{Kind: AuthErrorUnknown, StatusCode: resp.StatusCode, Detail: fmt.Sprintf("unexpected status validating token: %d", resp.StatusCode)}
 	}
 }

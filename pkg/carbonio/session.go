@@ -50,19 +50,24 @@ func (s *Session) Login() (string, error) {
 	if s.Store != nil {
 		cfg, err := s.Store.GetConfig()
 		if err != nil {
-			log.Warn().Err(err).Msg("[auth] cannot read cached auth token, forcing re-login")
+			log.Warn().Err(err).Str("username", s.Username).Msg("[auth] cannot read cached auth token, forcing re-login")
 		} else if cfg != nil && cfg.AuthToken != "" {
+			log.Debug().Str("username", s.Username).Msg("[auth] found cached auth token, validating against server")
 			status, err := s.Auth.ValidateToken(cfg.AuthToken)
 			switch {
 			case err != nil:
-				log.Warn().Err(err).Msg("[auth] cannot validate cached auth token, forcing re-login")
+				logWithAuthError(log.Warn(), err).Str("username", s.Username).
+					Msg("[auth] cannot validate cached auth token against server, forcing re-login")
 			case status == TokenValid:
 				log.Debug().Str("username", s.Username).Msg("[auth] reusing cached auth token")
 				s.token = cfg.AuthToken
 				return s.token, nil
 			default:
-				log.Info().Str("username", s.Username).Msg("[auth] cached auth token no longer accepted by server, re-authenticating")
+				log.Info().Str("username", s.Username).Str("tokenStatus", string(status)).
+					Msg("[auth] cached auth token no longer accepted by server, re-authenticating")
 			}
+		} else {
+			log.Debug().Str("username", s.Username).Msg("[auth] no cached auth token found, performing password login")
 		}
 	}
 
@@ -83,10 +88,14 @@ func (s *Session) Reauthenticate() (string, error) {
 // reauthenticate performs the password login and persistence; callers must
 // hold s.mu.
 func (s *Session) reauthenticate() (string, error) {
+	log.Debug().Str("username", s.Username).Msg("[auth] no usable cached auth token, performing username/password login")
 	token, err := s.Auth.CarbonioZxAuth(s.Username, s.Password)
 	if err != nil {
+		logWithAuthError(log.Error(), err).Str("username", s.Username).
+			Msg("[auth] username/password login failed, cannot obtain a fresh auth token")
 		return "", err
 	}
+	log.Info().Str("username", s.Username).Msg("[auth] username/password login succeeded, obtained a fresh auth token")
 	s.token = *token
 
 	if s.Store != nil {
@@ -109,7 +118,9 @@ func (s *Session) reauthenticate() (string, error) {
 			record.SyncEnabled = existing.SyncEnabled
 		}
 		if err := s.Store.UpsertConfig(record); err != nil {
-			log.Error().Err(err).Msg("[auth] cannot persist refreshed auth token")
+			log.Error().Err(err).Str("username", s.Username).Msg("[auth] cannot persist refreshed auth token")
+		} else {
+			log.Debug().Str("username", s.Username).Msg("[auth] refreshed auth token cached for reuse on next run")
 		}
 	}
 
