@@ -9,6 +9,7 @@ This project is licensed under the [GNU Affero General Public License v3](COPYIN
 ## Requirements
 
 - Go 1.24 or later
+- Node.js 16 or later, with npm (to build the desktop GUI frontend)
 - Access to a Carbonio server
 - To build the desktop GUI on Linux: GTK3 and WebKit2GTK 4.1 development packages (e.g. `gtk3` and `webkit2gtk-4.1` on Arch/Manjaro, `libgtk-3-dev` and `libwebkit2gtk-4.1-dev` on Debian/Ubuntu)
 
@@ -20,7 +21,7 @@ This project is licensed under the [GNU Affero General Public License v3](COPYIN
 make build
 ```
 
-This produces the `carbonio-files-client` binary in the project root (symbols stripped and optimized).
+This installs the frontend's npm dependencies, builds it (Svelte + Tailwind CSS, see [Desktop GUI frontend](#desktop-gui-frontend)) into `cmd/carbonio-files-go-client/frontend/dist/`, then builds the Go binary, which embeds that output. It produces the `carbonio-files-client` binary in the project root (symbols stripped and optimized).
 
 ## Desktop GUI
 
@@ -48,13 +49,23 @@ Running the binary with **no arguments** opens the desktop GUI (built with [Wail
   - **Sync folder** — shows the currently configured local sync folder and a **Change folder…** button that reopens the native OS folder picker and persists the new choice.
   - **Logging** — lets you change the log **level** (trace…disabled), **format** (console/JSON), and **output** (console/file/both, with a file path field), applied immediately and persisted for future launches.
 
+### Desktop GUI frontend
+
+The GUI is a [Svelte](https://svelte.dev) single-page app styled with [Tailwind CSS](https://tailwindcss.com), built with [Vite](https://vitejs.dev), and embedded into the Go binary via `go:embed` (see `cmd/carbonio-files-go-client/main.go`). Source lives in `cmd/carbonio-files-go-client/frontend/src/`; `make build`/`make test` run `npm install`/`npm run build` automatically and the compiled output lands in `frontend/dist/`, which is what gets embedded (also committed to git, so a checkout builds even without running the frontend step first).
+
+- Every backend call goes through `src/lib/api.js`, a thin wrapper over the Wails-injected `window.go.main.App.*` bindings.
+- App-wide state (session, current view/section, cached preferences panels) lives in Svelte stores under `src/lib/stores.js`; `src/lib/auth.js` holds the login/logout flow shared between manual sign-in and Init()'s auto-login.
+- **Theming**: every color in the UI resolves through a CSS custom property (`--color-*`, defined in `src/app.css`) instead of a hardcoded value, and Tailwind's semantic color tokens (`bg-surface`, `text-muted`, `bg-brand`, ...) read those properties (see `tailwind.config.js`). Switching themes is just toggling a `.dark` class on `<html>`; adding a new theme is a new CSS class block plus an entry in `src/lib/theme.js`'s `THEMES` list, no component changes needed. The sidebar's **Theme** control lets the user pick Light, Dark, or System (follows the OS setting live), persisted to `localStorage`.
+
 ### Building/running with the Wails CLI (optional)
 
-For live-reload development, install the [Wails CLI](https://wails.io/docs/gettingstarted/installation) and run from `cmd/carbonio-files-go-client`:
+For live-reload development, install the [Wails CLI](https://wails.io/docs/gettingstarted/installation) and run from `cmd/carbonio-files-go-client` (it drives `npm install`/`npm run dev` in `frontend/` for you, per `wails.json`'s `frontend:*` hooks):
 
 ```bash
 wails dev -tags webkit2_41
 ```
+
+To iterate on the frontend alone (in a regular browser, backend calls mocked or unavailable), run `npm run dev` directly from `cmd/carbonio-files-go-client/frontend`.
 
 ## Configuration
 
@@ -269,7 +280,7 @@ carbonio-files-go-client/
 │       ├── app.go               # Wails-bound GUI backend (login, credential test/save, sync-folder wizard, logging prefs)
 │       ├── app_test.go          # GUI login/persist/auto-login/logout/sync-folder/credential-test tests
 │       ├── wails.json           # Wails project config
-│       └── frontend/dist/       # Plain HTML/CSS/JS GUI (no JS build step)
+│       └── frontend/             # Svelte + Tailwind GUI (Vite build); src/ is source, dist/ is the embedded build output
 ├── pkg/
 │   ├── carbonio/
 │   │   └── carbonio.go          # HTTP auth (classified AuthError) and file transfer

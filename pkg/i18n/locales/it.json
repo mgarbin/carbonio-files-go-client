@@ -72,5 +72,9 @@
   "logging.format.json": "JSON",
   "logging.output.console": "Solo console",
   "logging.output.file": "Solo file",
-  "logging.output.both": "Console e file"
+  "logging.output.both": "Console e file",
+  "theme.label": "Tema",
+  "theme.light": "Chiaro",
+  "theme.dark": "Scuro",
+  "theme.system": "Sistema"
 }

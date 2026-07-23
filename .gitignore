@@ -3,3 +3,5 @@
 /files
 *.db
 *.db.key
+node_modules/
+cmd/carbonio-files-go-client/frontend/.vite/
