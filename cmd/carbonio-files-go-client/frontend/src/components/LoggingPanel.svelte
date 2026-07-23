@@ -22,6 +22,8 @@
   let output = cached.output;
   let path = cached.path;
   let browsing = false;
+  let opening = false;
+  let openError = null;
 
   onMount(loadIfNeeded);
 
@@ -69,6 +71,25 @@
       })
       .catch((err) => {
         browsing = false;
+        console.error(err);
+      });
+  }
+
+  // openLogFile asks the backend to open the currently shown log file
+  // path with the OS' default program (e.g. Notepad, TextEdit, whichever
+  // editor is associated with .log files). Uses `path` as typed, even if
+  // not saved yet, so "open" always reflects what's on screen.
+  function openLogFile() {
+    opening = true;
+    openError = null;
+    api
+      .openLogFile(path)
+      .then(() => {
+        opening = false;
+      })
+      .catch((err) => {
+        opening = false;
+        openError = "generic";
         console.error(err);
       });
   }
@@ -136,11 +157,19 @@
       {#if $logging.error}
         <Banner kind="error">{errorMessage($logging.error)}</Banner>
       {/if}
+      {#if openError}
+        <Banner kind="error">{errorMessage(openError)}</Banner>
+      {/if}
       {#if $logging.saved}
         <Banner kind="success">{t("logging.savedNote")}</Banner>
       {/if}
 
-      <Button type="submit" disabled={$logging.busy}>{$logging.busy ? t("logging.saving") : t("logging.saveButton")}</Button>
+      <div class="flex gap-2.5">
+        <Button type="submit" full={false} disabled={$logging.busy}>{$logging.busy ? t("logging.saving") : t("logging.saveButton")}</Button>
+        <Button type="button" variant="secondary" full={false} disabled={$logging.busy || opening} on:click={openLogFile}>
+          {opening ? t("logging.opening") : t("logging.openButton")}
+        </Button>
+      </div>
     </form>
   </PanelCard>
 {/if}

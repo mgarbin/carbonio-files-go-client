@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"carbonio-files-go-client/pkg/appdir"
@@ -71,9 +73,20 @@ func NewApp() *App {
 	return &App{auth: &carbonio.HTTPAuthenticator{}}
 }
 
+// guiDefaultOutput is the Output the desktop GUI falls back to when
+// nothing has been saved yet - fresh install, before the first login.
+// Unlike the CLI's console-only logger.Default(), the GUI writes to a log
+// file only: a double-clicked app usually has no attached console for the
+// user to see "console" output on, and there needs to be somewhere to
+// find diagnostics before Preferences > Logging is ever opened or a
+// first login even happens.
+const guiDefaultOutput = logger.OutputFile
+
 // startup is wired as options.App.OnStartup: it opens the per-user encrypted
-// credential store used for auto-login. Failure to open it is not fatal -
-// the GUI still works, it just always shows the login screen.
+// credential store used for auto-login and applies logging settings -
+// saved ones if a config row already exists, guiDefaultOutput otherwise -
+// so the log file exists from the moment the app launches, independent of
+// login state.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	dbPath, err := configDBPath()
@@ -88,10 +101,15 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.db = db
 
+	var level, format, output, path string
 	if cfg, err := db.GetConfig(); err == nil && cfg != nil {
-		if err := a.applyLoggingConfig(cfg.LogLevel, cfg.LogFormat, cfg.LogOutput, cfg.LogPath); err != nil {
-			log.Error().Err(err).Msg("[gui] cannot apply saved logging settings")
-		}
+		level, format, output, path = cfg.LogLevel, cfg.LogFormat, cfg.LogOutput, cfg.LogPath
+	}
+	if output == "" {
+		output = string(guiDefaultOutput)
+	}
+	if err := a.applyLoggingConfig(level, format, output, path); err != nil {
+		log.Error().Err(err).Msg("[gui] cannot apply logging settings")
 	}
 }
 
@@ -134,11 +152,12 @@ type LoggingSettings struct {
 	Path   string `json:"path"`
 }
 
-// GetLoggingConfig returns the persisted logging settings, or the built-in
-// defaults if none were saved yet (e.g. before the first login).
+// GetLoggingConfig returns the persisted logging settings, or the GUI's
+// defaults (see guiDefaultOutput) if none were saved yet (e.g. before the
+// first login).
 func (a *App) GetLoggingConfig() LoggingSettings {
 	def := logger.Default()
-	settings := LoggingSettings{Level: def.Level, Format: string(def.Format), Output: string(def.Output), Path: logger.DefaultPath}
+	settings := LoggingSettings{Level: def.Level, Format: string(def.Format), Output: string(guiDefaultOutput), Path: logger.DefaultPath}
 	if a.db == nil {
 		return settings
 	}
@@ -185,6 +204,41 @@ func (a *App) UpdateLoggingConfig(level, format, output, path string) error {
 		return err
 	}
 	return a.applyLoggingConfig(level, format, output, path)
+}
+
+// OpenLogFile opens path with the host OS' default program for its file
+// type - the same association double-clicking it in a file manager would
+// use (a text editor on most systems). path is normally whatever the
+// Logging panel currently shows (which may not be saved yet); an empty
+// path falls back to the built-in default (see logger.DefaultPath).
+// Returns an error wrapping the underlying os.Stat failure if the file
+// does not exist yet - e.g. Output is still "console" or nothing has been
+// logged since the path changed.
+func (a *App) OpenLogFile(path string) error {
+	if strings.TrimSpace(path) == "" {
+		path = logger.DefaultPath
+	}
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("log file not found: %w", err)
+	}
+	return openWithDefaultApp(path)
+}
+
+// openWithDefaultApp launches path with the host OS' default handler for
+// its file type, without blocking on it: "open" on macOS, the shell's
+// file-association mechanism via rundll32 on Windows, "xdg-open" on
+// Linux/BSD desktops.
+func openWithDefaultApp(path string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", path)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", path)
+	default:
+		cmd = exec.Command("xdg-open", path)
+	}
+	return cmd.Start()
 }
 
 // ChooseLogFolder opens the native OS directory picker (the same

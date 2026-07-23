@@ -26,4 +26,9 @@ The [desktop GUI](desktop-gui.md) has no CLI flags; instead its logging settings
 are persisted in the same encrypted SQLite config row as the saved
 credentials (see [Configuration storage (SQLite)](configuration-storage-sqlite.md)),
 read on startup, editable from **Preferences > Logging**, and backed by the
-`App.GetLoggingConfig` / `App.UpdateLoggingConfig` Wails-bound methods.
+`App.GetLoggingConfig` / `App.UpdateLoggingConfig` Wails-bound methods. An
+**Open log file** button next to **Save** opens the file currently shown in
+the path field with the OS' default program for it (`App.OpenLogFile`,
+e.g. `xdg-open` on Linux, `open` on macOS, the shell file association on
+Windows) - it errors if that file doesn't exist yet, e.g. Output is still
+"console" or nothing has been logged since the path last changed.

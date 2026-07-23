@@ -19,3 +19,4 @@ export const chooseLogFolder = (currentPath) => backend().ChooseLogFolder(curren
 export const getLoggingConfig = () => backend().GetLoggingConfig();
 export const updateLoggingConfig = (level, format, output, path) =>
   backend().UpdateLoggingConfig(level, format, output, path);
+export const openLogFile = (path) => backend().OpenLogFile(path);
