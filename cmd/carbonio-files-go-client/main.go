@@ -15,15 +15,18 @@ import (
 	"io/fs"
 	"os"
 
+	"carbonio-files-go-client/img"
 	"carbonio-files-go-client/pkg/actions"
 	"carbonio-files-go-client/pkg/carbonio"
 	"carbonio-files-go-client/pkg/config"
 	"carbonio-files-go-client/pkg/logger"
 
+	"github.com/energye/systray"
 	"github.com/rs/zerolog/log"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 //go:embed all:frontend/dist
@@ -79,13 +82,21 @@ func runGUI() {
 
 	app := NewApp()
 
+	// Run the system tray in the background so closing the main window
+	// (the X button) minimizes to the notification area instead of
+	// exiting; the app only really quits from the tray's "Quit" item or
+	// OS session teardown. Wails' native event loop needs the goroutine
+	// it's started on for itself, so the tray gets its own.
+	go runSystemTray(app)
+
 	err = wails.Run(&options.App{
-		Title:            "Carbonio Files Client",
-		Width:            1024,
-		Height:           720,
-		MinWidth:         860,
-		MinHeight:        600,
-		BackgroundColour: options.NewRGB(255, 255, 255),
+		Title:             "Carbonio Files Client",
+		Width:             1024,
+		Height:            720,
+		MinWidth:          860,
+		MinHeight:         600,
+		BackgroundColour:  options.NewRGB(255, 255, 255),
+		HideWindowOnClose: true,
 		AssetServer: &assetserver.Options{
 			Assets: frontendFS,
 		},
@@ -99,6 +110,49 @@ func runGUI() {
 		log.Error().Err(err).Msg("Error starting GUI")
 		os.Exit(1)
 	}
+}
+
+// runSystemTray starts the notification-area icon and blocks until
+// systray.Quit() is called (from the tray's "Quit" item or app.shutdown).
+// It must run on its own goroutine: both Wails' native event loop and
+// systray's want to drive a platform event loop, and each expects the
+// goroutine it was started on for that.
+func runSystemTray(app *App) {
+	systray.Run(func() { onTrayReady(app) }, func() {})
+}
+
+// onTrayReady configures the tray icon/tooltip and menu once the tray
+// backend is ready. "Show window" and left-clicking/double-clicking the
+// icon restore the window that HideWindowOnClose kept alive but hidden;
+// "Quit" is the only path that actually terminates the app.
+func onTrayReady(app *App) {
+	systray.SetIcon(img.Icon)
+	systray.SetTitle("Carbonio Files Client")
+	systray.SetTooltip("Carbonio Files Client")
+
+	show := systray.AddMenuItem("Show window", "Show the Carbonio Files Client window")
+	show.Click(func() {
+		if app.ctx != nil {
+			wailsruntime.WindowShow(app.ctx)
+		}
+	})
+
+	systray.AddSeparator()
+
+	quit := systray.AddMenuItem("Quit", "Quit Carbonio Files Client")
+	quit.Click(func() {
+		if app.ctx != nil {
+			wailsruntime.Quit(app.ctx)
+		}
+	})
+
+	onShowClick := func(_ systray.IMenu) {
+		if app.ctx != nil {
+			wailsruntime.WindowShow(app.ctx)
+		}
+	}
+	systray.SetOnClick(onShowClick)
+	systray.SetOnDClick(onShowClick)
 }
 
 // runCLI is the original command-line entry point: it holds every flag
