@@ -812,3 +812,108 @@ func TestApp_SyncEnabledPersistsAcrossRestart(t *testing.T) {
 		t.Fatalf("background sync job started after restart despite SyncEnabled=false")
 	}
 }
+
+// TestApp_SyncIntervalMinutesDefaultsValidatesAndPersists covers the
+// Preferences > Synchronization dropdown's backend: the default before
+// anything is saved, rejection of values outside validSyncIntervalsMinutes,
+// the requirement of a prior login (the preference lives in the same
+// config row as the credentials), and that a valid choice round-trips
+// through GetSyncIntervalMinutes.
+func TestApp_SyncIntervalMinutesDefaultsValidatesAndPersists(t *testing.T) {
+	const user, pass = "user@example.com", "s3cret"
+	endpoint := newFakeCarbonioServer(t, user, pass)
+	dbPath := filepath.Join(t.TempDir(), "gui-config.db")
+
+	app := openTestApp(t, dbPath)
+	defer app.db.Close()
+
+	if got := app.GetSyncIntervalMinutes(); got != defaultSyncIntervalMinutes {
+		t.Fatalf("GetSyncIntervalMinutes() before any config = %d, want default %d", got, defaultSyncIntervalMinutes)
+	}
+
+	// Requires a prior login: no config row to store the preference in yet.
+	if err := app.SetSyncIntervalMinutes(15); err == nil {
+		t.Fatalf("SetSyncIntervalMinutes(15) before login = nil error, want an error")
+	}
+
+	if result := app.Login(endpoint, user, pass); !result.Success {
+		t.Fatalf("Login() = %+v, want Success=true", result)
+	}
+
+	// Only 5, 15, 30 and 60 are accepted.
+	for _, invalid := range []int{0, 1, 10, 20, 45, 90, -5} {
+		if err := app.SetSyncIntervalMinutes(invalid); err == nil {
+			t.Fatalf("SetSyncIntervalMinutes(%d) = nil error, want an error (not in %v)", invalid, validSyncIntervalsMinutes)
+		}
+	}
+	if got := app.GetSyncIntervalMinutes(); got != defaultSyncIntervalMinutes {
+		t.Fatalf("GetSyncIntervalMinutes() after only-rejected attempts = %d, want it to remain the default %d", got, defaultSyncIntervalMinutes)
+	}
+
+	for _, valid := range validSyncIntervalsMinutes {
+		if err := app.SetSyncIntervalMinutes(valid); err != nil {
+			t.Fatalf("SetSyncIntervalMinutes(%d) error = %v", valid, err)
+		}
+		if got := app.GetSyncIntervalMinutes(); got != valid {
+			t.Fatalf("GetSyncIntervalMinutes() after SetSyncIntervalMinutes(%d) = %d, want %d", valid, got, valid)
+		}
+	}
+}
+
+// TestApp_SetSyncIntervalMinutesRestartsRunningJobWithoutImmediateCycle
+// verifies that changing the interval while the background job is running
+// (a) restarts it, so the new interval governs the next tick instead of
+// only applying after a relaunch, and (b) never runs an immediate cycle
+// itself - it must not grab the sync lock, exactly like
+// TestApp_SetSyncEnabledDoesNotRaceExplicitStartFullSync guards for
+// SetSyncEnabled(true).
+func TestApp_SetSyncIntervalMinutesRestartsRunningJobWithoutImmediateCycle(t *testing.T) {
+	const user, pass = "user@example.com", "s3cret"
+	endpoint := newFakeCarbonioServer(t, user, pass)
+	dbPath := filepath.Join(t.TempDir(), "gui-config.db")
+
+	app := openTestApp(t, dbPath)
+	defer app.db.Close()
+	defer app.stopBackgroundSync()
+
+	if result := app.Login(endpoint, user, pass); !result.Success {
+		t.Fatalf("Login() = %+v, want Success=true", result)
+	}
+	syncDir := filepath.Join(t.TempDir(), "carbonio-sync")
+	if err := app.SetSyncFolder(syncDir); err != nil {
+		t.Fatalf("SetSyncFolder() error = %v", err)
+	}
+
+	// Not running yet: must no-op silently, not panic or error.
+	if err := app.SetSyncIntervalMinutes(30); err != nil {
+		t.Fatalf("SetSyncIntervalMinutes(30) while job not running error = %v", err)
+	}
+	if app.syncJobCancel != nil {
+		t.Fatalf("SetSyncIntervalMinutes() started the background job on its own")
+	}
+
+	if err := app.SetSyncEnabled(true); err != nil {
+		t.Fatalf("SetSyncEnabled(true) error = %v", err)
+	}
+	if app.syncJobCancel == nil {
+		t.Fatalf("SetSyncEnabled(true) did not start the background job")
+	}
+	firstCtx := app.syncJobCtx
+
+	if err := app.SetSyncIntervalMinutes(60); err != nil {
+		t.Fatalf("SetSyncIntervalMinutes(60) error = %v", err)
+	}
+	if app.syncJobCancel == nil {
+		t.Fatalf("SetSyncIntervalMinutes() left the background job stopped, want it restarted")
+	}
+	if firstCtx.Err() == nil {
+		t.Fatalf("SetSyncIntervalMinutes() did not restart the running job (previous context still alive)")
+	}
+	if app.syncJobCtx == firstCtx || app.syncJobCtx.Err() != nil {
+		t.Fatalf("SetSyncIntervalMinutes() left the running job on a stale/cancelled context after restart")
+	}
+	if !app.syncMu.TryLock() {
+		t.Fatalf("SetSyncIntervalMinutes() left the sync lock held - restarting the job must not run an immediate cycle")
+	}
+	app.syncMu.Unlock()
+}

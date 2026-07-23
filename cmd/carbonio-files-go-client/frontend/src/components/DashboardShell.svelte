@@ -4,6 +4,7 @@
   import DashboardHome from "./DashboardHome.svelte";
   import AuthenticationPanel from "./AuthenticationPanel.svelte";
   import SyncFolderPanel from "./SyncFolderPanel.svelte";
+  import SyncIntervalPanel from "./SyncIntervalPanel.svelte";
   import LoggingPanel from "./LoggingPanel.svelte";
 </script>
 
@@ -14,6 +15,8 @@
       <AuthenticationPanel />
     {:else if $section === "syncFolder"}
       <SyncFolderPanel />
+    {:else if $section === "syncInterval"}
+      <SyncIntervalPanel />
     {:else if $section === "logging"}
       <LoggingPanel />
     {:else}

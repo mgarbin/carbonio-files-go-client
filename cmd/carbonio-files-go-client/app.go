@@ -26,9 +26,16 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// backgroundSyncInterval is how often the background sync job (see
-// maybeStartBackgroundSync) re-checks the cache and reconciles changes.
-const backgroundSyncInterval = 5 * time.Minute
+// defaultSyncIntervalMinutes is the background sync job's tick interval
+// (see SetSyncIntervalMinutes/GetSyncIntervalMinutes) when no preference
+// has been saved yet - also the dashboard's Preferences > Synchronization
+// dropdown's default selection.
+const defaultSyncIntervalMinutes = 5
+
+// validSyncIntervalsMinutes are the only values SetSyncIntervalMinutes
+// accepts, and the exact choices offered by the dashboard's Preferences >
+// Synchronization dropdown.
+var validSyncIntervalsMinutes = []int{5, 15, 30, 60}
 
 // App is the Wails-bound backend for the desktop GUI. Every exported method
 // is callable from the frontend as window.go.main.App.<Method>.
@@ -58,13 +65,18 @@ type App struct {
 	// held by a sync operation.
 	syncing atomic.Bool
 
-	// syncJobMu guards syncJobCancel: maybeStartBackgroundSync and
-	// stopBackgroundSync can be called concurrently (e.g. a login request
-	// racing the setup wizard's completion).
+	// syncJobMu guards syncJobCancel/syncJobCtx: maybeStartBackgroundSync
+	// and stopBackgroundSync can be called concurrently (e.g. a login
+	// request racing the setup wizard's completion).
 	syncJobMu sync.Mutex
 	// syncJobCancel stops the running background sync loop, or nil if it
 	// isn't running.
 	syncJobCancel context.CancelFunc
+	// syncJobCtx is the context syncJobCancel cancels, kept alongside it
+	// so a caller can tell whether a given job instance is still the one
+	// currently running (ctx.Err() == nil) versus superseded by a restart
+	// (ctx.Err() != nil) - see restartBackgroundSyncJobIfRunning.
+	syncJobCtx context.Context
 }
 
 // Session describes the currently authenticated user, if any. Token is
@@ -489,7 +501,8 @@ func (a *App) endSync() {
 
 // maybeStartBackgroundSync starts the periodic background sync job (see
 // runBackgroundSyncLoop), running its first cycle immediately so the app
-// doesn't wait up to backgroundSyncInterval for the first tick - used by
+// doesn't wait up to the configured sync interval (see
+// GetSyncIntervalMinutes) for the first tick - used by
 // every login path (and the first-time setup wizard) to resume syncing
 // right away. No-ops if the job is already running, or the session/sync
 // folder it depends on aren't available yet. Safe to call repeatedly.
@@ -518,6 +531,7 @@ func (a *App) startBackgroundSyncJob(runFirstCycleImmediately bool) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	a.syncJobCancel = cancel
+	a.syncJobCtx = ctx
 	go a.runBackgroundSyncLoop(ctx, runFirstCycleImmediately)
 }
 
@@ -563,6 +577,79 @@ func (a *App) GetSyncEnabled() bool {
 	return cfg.SyncEnabled
 }
 
+// GetSyncIntervalMinutes returns the persisted background sync interval, in
+// minutes, or defaultSyncIntervalMinutes if none has been saved yet (e.g.
+// before the first login) or the stored value is no longer one of
+// validSyncIntervalsMinutes.
+func (a *App) GetSyncIntervalMinutes() int {
+	if a.db != nil {
+		if cfg, err := a.db.GetConfig(); err == nil && cfg != nil && isValidSyncInterval(cfg.SyncIntervalMinutes) {
+			return cfg.SyncIntervalMinutes
+		}
+	}
+	return defaultSyncIntervalMinutes
+}
+
+// SetSyncIntervalMinutes persists the dashboard's Preferences >
+// Synchronization interval choice (see
+// sqlitecache.ConfigRecord.SyncIntervalMinutes) and, if the periodic
+// background sync job is currently running, restarts it so the new
+// interval governs its very next tick instead of only taking effect after
+// the app is relaunched.
+func (a *App) SetSyncIntervalMinutes(minutes int) error {
+	if !isValidSyncInterval(minutes) {
+		return fmt.Errorf("invalid sync interval: %d minutes (must be one of %v)", minutes, validSyncIntervalsMinutes)
+	}
+	if a.db == nil {
+		return errors.New("credential store unavailable")
+	}
+	cfg, err := a.db.GetConfig()
+	if err != nil {
+		return err
+	}
+	if cfg == nil {
+		return errors.New("log in first: the sync interval is stored alongside your saved credentials")
+	}
+	cfg.SyncIntervalMinutes = minutes
+	if err := a.db.UpdateConfig(*cfg); err != nil {
+		return err
+	}
+	a.restartBackgroundSyncJobIfRunning()
+	return nil
+}
+
+// isValidSyncInterval reports whether minutes is one of
+// validSyncIntervalsMinutes.
+func isValidSyncInterval(minutes int) bool {
+	for _, v := range validSyncIntervalsMinutes {
+		if v == minutes {
+			return true
+		}
+	}
+	return false
+}
+
+// restartBackgroundSyncJobIfRunning restarts the periodic background sync
+// job so a just-changed interval (see SetSyncIntervalMinutes) applies to
+// its ticker right away. No-ops if the job isn't currently running - it
+// will simply use the new interval whenever it next starts. The restart
+// never runs an immediate cycle: merely resetting the ticker shouldn't by
+// itself trigger a fresh full sync.
+func (a *App) restartBackgroundSyncJobIfRunning() {
+	a.syncJobMu.Lock()
+	running := a.syncJobCancel != nil
+	if running {
+		a.syncJobCancel()
+		a.syncJobCancel = nil
+		a.syncJobCtx = nil
+	}
+	a.syncJobMu.Unlock()
+
+	if running {
+		a.startBackgroundSyncJob(false)
+	}
+}
+
 // stopBackgroundSync stops the periodic background sync job, if running.
 // Called on Logout (the session it depends on no longer applies) and on
 // shutdown.
@@ -573,23 +660,25 @@ func (a *App) stopBackgroundSync() {
 	if a.syncJobCancel != nil {
 		a.syncJobCancel()
 		a.syncJobCancel = nil
+		a.syncJobCtx = nil
 	}
 }
 
 // runBackgroundSyncLoop optionally runs one sync cycle immediately (see
 // startBackgroundSyncJob's runFirstCycleImmediately - true from every login
 // path, so enabling sync at startup starts the whole sync process right
-// away instead of waiting up to backgroundSyncInterval for the first tick;
-// false from SetSyncEnabled(true), whose caller - the dashboard toggle -
-// already runs its own explicit first sync), then ticks every
-// backgroundSyncInterval and runs one runBackgroundSyncCycle per tick,
-// until ctx is cancelled by stopBackgroundSync.
+// away instead of waiting for the first tick; false from
+// SetSyncEnabled(true), whose caller - the dashboard toggle - already runs
+// its own explicit first sync), then ticks every GetSyncIntervalMinutes
+// (see SetSyncIntervalMinutes) and runs one runBackgroundSyncCycle per
+// tick, until ctx is cancelled by stopBackgroundSync or
+// restartBackgroundSyncJobIfRunning.
 func (a *App) runBackgroundSyncLoop(ctx context.Context, runFirstCycleImmediately bool) {
 	if runFirstCycleImmediately {
 		a.runBackgroundSyncCycle()
 	}
 
-	ticker := time.NewTicker(backgroundSyncInterval)
+	ticker := time.NewTicker(time.Duration(a.GetSyncIntervalMinutes()) * time.Minute)
 	defer ticker.Stop()
 	for {
 		select {

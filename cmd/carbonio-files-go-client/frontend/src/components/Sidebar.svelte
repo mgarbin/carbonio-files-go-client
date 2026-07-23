@@ -6,6 +6,7 @@
   const prefItems = [
     { key: "authentication", label: () => t("menu.authentication") },
     { key: "syncFolder", label: () => t("menu.syncFolder") },
+    { key: "syncInterval", label: () => t("menu.syncInterval") },
     { key: "logging", label: () => t("menu.logging") },
   ];
 

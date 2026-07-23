@@ -29,16 +29,17 @@ func TestConfigCRUD(t *testing.T) {
 
 	authToken := "secret-auth-token"
 	in := ConfigRecord{
-		Endpoint:         "mail.example.com",
-		Username:         "myemail",
-		Password:         "mypassword",
-		AuthToken:        authToken,
-		FilesLocalFolder: "./files",
-		LogLevel:         "debug",
-		LogFormat:        "json",
-		LogOutput:        "both",
-		LogPath:          "/tmp/carbonio-test.log",
-		SyncEnabled:      true,
+		Endpoint:            "mail.example.com",
+		Username:            "myemail",
+		Password:            "mypassword",
+		AuthToken:           authToken,
+		FilesLocalFolder:    "./files",
+		LogLevel:            "debug",
+		LogFormat:           "json",
+		LogOutput:           "both",
+		LogPath:             "/tmp/carbonio-test.log",
+		SyncEnabled:         true,
+		SyncIntervalMinutes: 15,
 	}
 	if err := h.CreateConfig(in); err != nil {
 		t.Fatalf("CreateConfig() error = %v", err)
@@ -57,7 +58,8 @@ func TestConfigCRUD(t *testing.T) {
 		t.Fatal("GetConfig() = nil, want a record")
 	}
 	if got.Endpoint != in.Endpoint || got.Username != in.Username || got.Password != in.Password || got.AuthToken != in.AuthToken || got.FilesLocalFolder != in.FilesLocalFolder ||
-		got.LogLevel != in.LogLevel || got.LogFormat != in.LogFormat || got.LogOutput != in.LogOutput || got.LogPath != in.LogPath || got.SyncEnabled != in.SyncEnabled {
+		got.LogLevel != in.LogLevel || got.LogFormat != in.LogFormat || got.LogOutput != in.LogOutput || got.LogPath != in.LogPath || got.SyncEnabled != in.SyncEnabled ||
+		got.SyncIntervalMinutes != in.SyncIntervalMinutes {
 		t.Fatalf("GetConfig() = %+v, want fields matching %+v", got, in)
 	}
 	if got.CreatedAt == "" || got.UpdatedAt == "" {
@@ -66,16 +68,17 @@ func TestConfigCRUD(t *testing.T) {
 
 	// Update, including clearing the optional AuthToken.
 	updated := ConfigRecord{
-		Endpoint:         "mail2.example.com",
-		Username:         "otheremail",
-		Password:         "newpassword",
-		AuthToken:        "",
-		FilesLocalFolder: "./other-files",
-		LogLevel:         "warn",
-		LogFormat:        "console",
-		LogOutput:        "file",
-		LogPath:          "/tmp/carbonio-other.log",
-		SyncEnabled:      false,
+		Endpoint:            "mail2.example.com",
+		Username:            "otheremail",
+		Password:            "newpassword",
+		AuthToken:           "",
+		FilesLocalFolder:    "./other-files",
+		LogLevel:            "warn",
+		LogFormat:           "console",
+		LogOutput:           "file",
+		LogPath:             "/tmp/carbonio-other.log",
+		SyncEnabled:         false,
+		SyncIntervalMinutes: 60,
 	}
 	if err := h.UpdateConfig(updated); err != nil {
 		t.Fatalf("UpdateConfig() error = %v", err)
@@ -85,7 +88,8 @@ func TestConfigCRUD(t *testing.T) {
 		t.Fatalf("GetConfig() after update error = %v", err)
 	}
 	if got.Endpoint != updated.Endpoint || got.Password != updated.Password || got.AuthToken != "" ||
-		got.LogLevel != updated.LogLevel || got.LogFormat != updated.LogFormat || got.LogOutput != updated.LogOutput || got.LogPath != updated.LogPath || got.SyncEnabled != updated.SyncEnabled {
+		got.LogLevel != updated.LogLevel || got.LogFormat != updated.LogFormat || got.LogOutput != updated.LogOutput || got.LogPath != updated.LogPath || got.SyncEnabled != updated.SyncEnabled ||
+		got.SyncIntervalMinutes != updated.SyncIntervalMinutes {
 		t.Fatalf("GetConfig() after update = %+v, want fields matching %+v", got, updated)
 	}
 
@@ -337,5 +341,73 @@ func TestConfigTableMigrationAddsSyncEnabledColumn(t *testing.T) {
 	}
 	if !got2.SyncEnabled {
 		t.Fatalf("GetConfig() after sync_enabled update = %+v, want SyncEnabled=true", got2)
+	}
+}
+
+// TestConfigTableMigrationAddsSyncIntervalColumn mirrors
+// TestConfigTableMigrationAddsSyncEnabledColumn for the
+// sync_interval_minutes column: opening a database created before it
+// existed must transparently add it (defaulting to 0, i.e. "use the
+// built-in default" - see ConfigRecord.SyncIntervalMinutes) without
+// touching the pre-existing row, and the column must then be fully usable.
+func TestConfigTableMigrationAddsSyncIntervalColumn(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "legacy-sync-interval.db")
+
+	h0, err := NewSqliteHelper(dbPath)
+	if err != nil {
+		t.Fatalf("NewSqliteHelper() error = %v", err)
+	}
+	legacyCfg := ConfigRecord{
+		Endpoint:         "legacy.example.com",
+		Username:         "legacyuser",
+		Password:         "legacy-password",
+		FilesLocalFolder: "./files",
+	}
+	if err := h0.CreateConfig(legacyCfg); err != nil {
+		t.Fatalf("CreateConfig() error = %v", err)
+	}
+	if _, err := h0.DB.Exec(`ALTER TABLE config DROP COLUMN sync_interval_minutes`); err != nil {
+		t.Fatalf("dropping column sync_interval_minutes to simulate legacy schema failed: %v", err)
+	}
+	if err := h0.Close(); err != nil {
+		t.Fatalf("h0.Close() error = %v", err)
+	}
+
+	// Opening it again through SqliteHelper must migrate the table in place.
+	h, err := NewSqliteHelper(dbPath)
+	if err != nil {
+		t.Fatalf("NewSqliteHelper() on legacy db error = %v", err)
+	}
+	defer h.Close()
+
+	var syncIntervalMinutes int
+	row := h.DB.QueryRow(`SELECT sync_interval_minutes FROM config WHERE id = 1`)
+	if err := row.Scan(&syncIntervalMinutes); err != nil {
+		t.Fatalf("querying migrated sync_interval_minutes column failed: %v", err)
+	}
+	if syncIntervalMinutes != 0 {
+		t.Fatalf("migrated sync_interval_minutes column = %d, want 0 (unset)", syncIntervalMinutes)
+	}
+
+	// The pre-existing row must have survived the migration untouched.
+	got, err := h.GetConfig()
+	if err != nil {
+		t.Fatalf("GetConfig() after migration error = %v", err)
+	}
+	if got == nil || got.Endpoint != legacyCfg.Endpoint || got.SyncIntervalMinutes != 0 {
+		t.Fatalf("GetConfig() after migration = %+v, want legacy row preserved with SyncIntervalMinutes=0", got)
+	}
+
+	// The newly-added column must be fully usable going forward.
+	got.SyncIntervalMinutes = 30
+	if err := h.UpdateConfig(*got); err != nil {
+		t.Fatalf("UpdateConfig() after migration error = %v", err)
+	}
+	got2, err := h.GetConfig()
+	if err != nil {
+		t.Fatalf("GetConfig() after sync_interval_minutes update error = %v", err)
+	}
+	if got2.SyncIntervalMinutes != 30 {
+		t.Fatalf("GetConfig() after sync_interval_minutes update = %+v, want SyncIntervalMinutes=30", got2)
 	}
 }

@@ -4,7 +4,7 @@ import { writable } from "svelte/store";
 export const booting = writable(true);
 export const translations = writable({});
 export const view = writable("login"); // 'login' | 'sync-setup' | 'dashboard'
-export const section = writable("dashboard"); // 'dashboard' | 'authentication' | 'syncFolder' | 'logging'
+export const section = writable("dashboard"); // 'dashboard' | 'authentication' | 'syncFolder' | 'syncInterval' | 'logging'
 export const session = writable(null); // { endpoint, username } | null
 
 // ---------- Login screen ----------
@@ -19,6 +19,14 @@ export function freshSyncFolder() {
   return { loaded: false, loading: false, path: "", busy: false, error: null, saved: false };
 }
 export const syncFolder = writable(freshSyncFolder());
+
+// ---------- Preferences: sync interval ----------
+// How often (in minutes) the background sync job re-checks the cache and
+// reconciles changes - one of 5, 15, 30 or 60 (see App.SetSyncIntervalMinutes).
+export function freshSyncInterval() {
+  return { loaded: false, loading: false, minutes: 5, busy: false, error: null, saved: false };
+}
+export const syncInterval = writable(freshSyncInterval());
 
 // ---------- Preferences: logging ----------
 export function freshLogging() {
@@ -44,5 +52,6 @@ export function resetSessionState() {
   loginPrefill.set({ endpoint: "", username: "" });
   loginError.set(null);
   syncFolder.set(freshSyncFolder());
+  syncInterval.set(freshSyncInterval());
   logging.set(freshLogging());
 }
