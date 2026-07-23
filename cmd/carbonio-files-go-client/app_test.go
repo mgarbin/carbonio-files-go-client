@@ -696,6 +696,53 @@ func TestApp_BackgroundSyncCycleSkipsWhileAnotherSyncRuns(t *testing.T) {
 	app.endSync()
 }
 
+// TestApp_SetSyncEnabledDoesNotRaceExplicitStartFullSync guards against a
+// regression of the dashboard's "Avvia Sincronizzazione" bug: the toggle
+// (DashboardHome.svelte's toggleSync) persists the on/off decision via
+// SetSyncEnabled(true) and then immediately calls StartFullSync() itself
+// for instant feedback. SetSyncEnabled(true) must start the background
+// job (see startBackgroundSyncJob) WITHOUT running its first cycle
+// immediately, or that cycle grabs the sync lock (tryBeginSync) before the
+// explicit StartFullSync call lands, which then fails with "a sync is
+// already in progress" - surfaced to the user as the dashboard's generic
+// "Si è verificato un errore" message.
+func TestApp_SetSyncEnabledDoesNotRaceExplicitStartFullSync(t *testing.T) {
+	const user, pass = "user@example.com", "s3cret"
+	endpoint := newFakeCarbonioServer(t, user, pass)
+	dbPath := filepath.Join(t.TempDir(), "gui-config.db")
+
+	app := openTestApp(t, dbPath)
+	defer app.db.Close()
+	defer app.stopBackgroundSync()
+
+	if result := app.Login(endpoint, user, pass); !result.Success {
+		t.Fatalf("Login() = %+v, want Success=true", result)
+	}
+	syncDir := filepath.Join(t.TempDir(), "carbonio-sync")
+	if err := app.SetSyncFolder(syncDir); err != nil {
+		t.Fatalf("SetSyncFolder() error = %v", err)
+	}
+
+	if err := app.SetSyncEnabled(true); err != nil {
+		t.Fatalf("SetSyncEnabled(true) error = %v", err)
+	}
+	if app.syncJobCancel == nil {
+		t.Fatalf("SetSyncEnabled(true) did not start the background job")
+	}
+	// The background job must not have grabbed the sync lock for an
+	// immediate first cycle: that's now deferred to its first periodic
+	// tick, precisely so it never contends with the toggle's own explicit
+	// StartFullSync call below.
+	if !app.syncMu.TryLock() {
+		t.Fatalf("SetSyncEnabled(true) left the sync lock held immediately, want it free")
+	}
+	app.syncMu.Unlock()
+
+	if err := app.StartFullSync(); err != nil && err.Error() == "a sync is already in progress" {
+		t.Fatalf("StartFullSync() right after SetSyncEnabled(true) = %v, want it to never race the background job for the lock", err)
+	}
+}
+
 // TestApp_SyncEnabledPersistsAcrossRestart verifies the dashboard's sync
 // on/off decision (SetSyncEnabled) survives an app restart and that the
 // background sync job resumes/stays off automatically to match - not just

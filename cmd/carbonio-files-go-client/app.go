@@ -488,11 +488,24 @@ func (a *App) endSync() {
 }
 
 // maybeStartBackgroundSync starts the periodic background sync job (see
-// runBackgroundSyncLoop) unless it is already running, or the session/sync
-// folder it depends on aren't available yet. Safe to call repeatedly -
-// every login path and the first-time setup wizard all call it - since it
-// no-ops once the job is already running.
+// runBackgroundSyncLoop), running its first cycle immediately so the app
+// doesn't wait up to backgroundSyncInterval for the first tick - used by
+// every login path (and the first-time setup wizard) to resume syncing
+// right away. No-ops if the job is already running, or the session/sync
+// folder it depends on aren't available yet. Safe to call repeatedly.
 func (a *App) maybeStartBackgroundSync() {
+	a.startBackgroundSyncJob(true)
+}
+
+// startBackgroundSyncJob is maybeStartBackgroundSync's implementation,
+// parameterized on whether the very first cycle runs immediately or waits
+// for the first periodic tick. SetSyncEnabled(true) passes false: the
+// dashboard toggle it backs already triggers its own explicit StartFullSync
+// right after persisting the preference, so an immediate cycle here would
+// race that call for the sync lock (tryBeginSync) and spuriously fail one
+// of the two with "a sync is already in progress" - surfaced to the user
+// as the dashboard's generic sync error.
+func (a *App) startBackgroundSyncJob(runFirstCycleImmediately bool) {
 	a.syncJobMu.Lock()
 	defer a.syncJobMu.Unlock()
 
@@ -505,7 +518,7 @@ func (a *App) maybeStartBackgroundSync() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	a.syncJobCancel = cancel
-	go a.runBackgroundSyncLoop(ctx)
+	go a.runBackgroundSyncLoop(ctx, runFirstCycleImmediately)
 }
 
 // SetSyncEnabled persists the dashboard's sync on/off decision (see
@@ -530,7 +543,7 @@ func (a *App) SetSyncEnabled(enabled bool) error {
 		return err
 	}
 	if enabled {
-		a.maybeStartBackgroundSync()
+		a.startBackgroundSyncJob(false)
 	} else {
 		a.stopBackgroundSync()
 	}
@@ -563,14 +576,18 @@ func (a *App) stopBackgroundSync() {
 	}
 }
 
-// runBackgroundSyncLoop runs one sync cycle immediately (so enabling sync -
-// at startup via maybeStartBackgroundSync, or via SetSyncEnabled(true) -
-// starts the whole sync process right away instead of waiting up to
-// backgroundSyncInterval for the first tick), then ticks every
+// runBackgroundSyncLoop optionally runs one sync cycle immediately (see
+// startBackgroundSyncJob's runFirstCycleImmediately - true from every login
+// path, so enabling sync at startup starts the whole sync process right
+// away instead of waiting up to backgroundSyncInterval for the first tick;
+// false from SetSyncEnabled(true), whose caller - the dashboard toggle -
+// already runs its own explicit first sync), then ticks every
 // backgroundSyncInterval and runs one runBackgroundSyncCycle per tick,
 // until ctx is cancelled by stopBackgroundSync.
-func (a *App) runBackgroundSyncLoop(ctx context.Context) {
-	a.runBackgroundSyncCycle()
+func (a *App) runBackgroundSyncLoop(ctx context.Context, runFirstCycleImmediately bool) {
+	if runFirstCycleImmediately {
+		a.runBackgroundSyncCycle()
+	}
 
 	ticker := time.NewTicker(backgroundSyncInterval)
 	defer ticker.Stop()
