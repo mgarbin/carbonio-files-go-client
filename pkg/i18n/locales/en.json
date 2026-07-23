@@ -40,6 +40,8 @@
   "dashboard.syncNeverRun": "Never run yet",
   "dashboard.missingLocallyLabel": "Missing locally",
   "dashboard.remoteItemsLabel": "Items on server",
+  "dashboard.localItemsLabel": "Items found locally",
+  "dashboard.missingOnServerLabel": "Missing on server",
   "dashboard.syncErrorsTitle": "Sync errors",
   "auth.panelTitle": "Authentication",
   "auth.serverLabel": "Server",

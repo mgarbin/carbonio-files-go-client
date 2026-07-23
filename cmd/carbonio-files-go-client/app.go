@@ -37,6 +37,10 @@ type App struct {
 	db   *sqlitecache.SqliteHelper
 	auth *carbonio.HTTPAuthenticator
 
+	// sessionMu guards session: the background sync goroutine reads it
+	// concurrently with login/logout requests mutating it. Access only via
+	// currentSession/setSession.
+	sessionMu sync.RWMutex
 	// session holds the currently authenticated user, if any.
 	session Session
 
@@ -414,7 +418,8 @@ func (a *App) SetSyncFolder(path string) error {
 // - potentially long - duration of the call since it walks the whole local
 // folder and the whole remote tree before returning.
 func (a *App) UpdateCacheSync() error {
-	if !a.session.LoggedIn {
+	session := a.currentSession()
+	if !session.LoggedIn {
 		return errors.New("log in first")
 	}
 	folder := a.GetSyncFolder()
@@ -424,7 +429,7 @@ func (a *App) UpdateCacheSync() error {
 	if !a.tryBeginSync() {
 		return errors.New("a sync is already in progress")
 	}
-	err := actions.UpdateCacheSync(a.session.Endpoint, a.session.Token, folder.Path)
+	err := actions.UpdateCacheSync(session.Endpoint, session.Token, folder.Path)
 	a.endSync()
 	if err != nil {
 		return err
@@ -445,7 +450,8 @@ func (a *App) UpdateCacheSync() error {
 // immediately, without running anything, if another sync (manual or the
 // periodic background job) is already in progress - see tryBeginSync.
 func (a *App) StartFullSync() error {
-	if !a.session.LoggedIn {
+	session := a.currentSession()
+	if !session.LoggedIn {
 		return errors.New("log in first")
 	}
 	folder := a.GetSyncFolder()
@@ -456,7 +462,7 @@ func (a *App) StartFullSync() error {
 		return errors.New("a sync is already in progress")
 	}
 	defer a.endSync()
-	return actions.FullCacheSync(a.session.Endpoint, a.session.Token, folder.Path, a.auth)
+	return actions.FullCacheSync(session.Endpoint, session.Token, folder.Path, a.auth)
 }
 
 // tryBeginSync attempts to acquire exclusive access for a sync operation:
@@ -493,7 +499,7 @@ func (a *App) maybeStartBackgroundSync() {
 	if a.syncJobCancel != nil {
 		return
 	}
-	if !a.session.LoggedIn || a.GetSyncFolder().Path == "" || !a.GetSyncEnabled() {
+	if !a.currentSession().LoggedIn || a.GetSyncFolder().Path == "" || !a.GetSyncEnabled() {
 		return
 	}
 
@@ -589,7 +595,8 @@ func (a *App) runBackgroundSyncLoop(ctx context.Context) {
 // StartFullSync or the previous cycle running long) is already in
 // progress - see tryBeginSync.
 func (a *App) runBackgroundSyncCycle() {
-	if !a.session.LoggedIn {
+	session := a.currentSession()
+	if !session.LoggedIn {
 		return
 	}
 	folder := a.GetSyncFolder()
@@ -602,7 +609,7 @@ func (a *App) runBackgroundSyncCycle() {
 	}
 	defer a.endSync()
 
-	endpoint, token := a.session.Endpoint, a.session.Token
+	endpoint, token := session.Endpoint, session.Token
 
 	if err := actions.UpdateCacheSync(endpoint, token, folder.Path); err != nil {
 		log.Error().Err(err).Msg("Background sync: updateCacheSync failed")
@@ -646,9 +653,15 @@ type SyncStatus struct {
 	// MissingLocally counts items that exist on the remote server but not
 	// yet on this device (sync_status = "remote_only").
 	MissingLocally int `json:"missingLocally"`
+	// MissingOnServer counts items that exist on this device but not yet
+	// on the remote server (sync_status = "local_only").
+	MissingOnServer int `json:"missingOnServer"`
 	// RemoteItems counts every item currently known to exist on the
 	// remote server.
 	RemoteItems int `json:"remoteItems"`
+	// LocalItems counts every item currently known to exist on this
+	// device.
+	LocalItems int `json:"localItems"`
 	// LastError is the error message from the last UpdateCacheSync run,
 	// or "" if it succeeded (or never ran).
 	LastError string `json:"lastError"`
@@ -692,11 +705,23 @@ func (a *App) GetSyncStatus() (SyncStatus, error) {
 	}
 	status.MissingLocally = missing
 
+	missingOnServer, err := cacheDb.CountBySyncStatus("local_only")
+	if err != nil {
+		return SyncStatus{}, err
+	}
+	status.MissingOnServer = missingOnServer
+
 	remote, err := cacheDb.CountRemotePresent()
 	if err != nil {
 		return SyncStatus{}, err
 	}
 	status.RemoteItems = remote
+
+	local, err := cacheDb.CountLocalPresent()
+	if err != nil {
+		return SyncStatus{}, err
+	}
+	status.LocalItems = local
 
 	return status, nil
 }
@@ -749,7 +774,7 @@ func (a *App) autoLogin(cfg *sqlitecache.ConfigRecord) LoginResult {
 		return result
 	}
 
-	a.session = Session{LoggedIn: true, Endpoint: cfg.Endpoint, Username: cfg.Username, Token: token}
+	a.setSession(Session{LoggedIn: true, Endpoint: cfg.Endpoint, Username: cfg.Username, Token: token})
 	a.maybeStartBackgroundSync()
 	return LoginResult{Success: true, Endpoint: cfg.Endpoint, Username: cfg.Username, NeedsSyncSetup: cfg.FilesLocalFolder == ""}
 }
@@ -823,7 +848,7 @@ func (a *App) login(endpoint, username, password string) LoginResult {
 		return result
 	}
 
-	a.session = Session{LoggedIn: true, Endpoint: endpoint, Username: username, Token: token}
+	a.setSession(Session{LoggedIn: true, Endpoint: endpoint, Username: username, Token: token})
 
 	result := LoginResult{Success: true, Endpoint: endpoint, Username: username}
 	if a.db != nil {
@@ -835,17 +860,31 @@ func (a *App) login(endpoint, username, password string) LoginResult {
 	return result
 }
 
+// currentSession returns a thread-safe snapshot of the current session.
+func (a *App) currentSession() Session {
+	a.sessionMu.RLock()
+	defer a.sessionMu.RUnlock()
+	return a.session
+}
+
+// setSession thread-safely replaces the current session.
+func (a *App) setSession(s Session) {
+	a.sessionMu.Lock()
+	defer a.sessionMu.Unlock()
+	a.session = s
+}
+
 // GetSession returns the currently authenticated user, or a zero Session if
 // nobody is logged in.
 func (a *App) GetSession() Session {
-	return a.session
+	return a.currentSession()
 }
 
 // Logout clears the in-memory session and removes the saved credentials so
 // the next launch shows the login screen again.
 func (a *App) Logout() error {
 	a.stopBackgroundSync()
-	a.session = Session{}
+	a.setSession(Session{})
 	if a.db == nil {
 		return nil
 	}

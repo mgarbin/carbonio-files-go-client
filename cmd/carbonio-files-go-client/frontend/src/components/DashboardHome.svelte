@@ -1,7 +1,5 @@
 <script>
   import { onMount, onDestroy } from "svelte";
-  import { get } from "svelte/store";
-  import { syncFolder } from "../lib/stores";
   import { t, errorMessage } from "../lib/i18n";
   import * as api from "../lib/api";
   import PanelCard from "./ui/PanelCard.svelte";
@@ -13,37 +11,12 @@
   // (manual or the periodic background job) is actually running.
   let syncPollHandle;
   onMount(() => {
-    loadSyncStatusIfNeeded();
     loadSyncStatus();
     syncPollHandle = setInterval(refreshSyncStatus, 2000);
   });
   onDestroy(() => {
     if (syncPollHandle) clearInterval(syncPollHandle);
   });
-
-  // Reuses the same syncFolder store as the Preferences panel, so whichever
-  // screen loads it first "wins" and the other just reads the cached value.
-  function loadSyncStatusIfNeeded() {
-    const sf = get(syncFolder);
-    if (sf.loaded || sf.loading) return;
-    syncFolder.update((s) => ({ ...s, loading: true }));
-    api
-      .getSyncFolder()
-      .then((settings) => {
-        syncFolder.set({
-          loaded: true,
-          loading: false,
-          path: (settings && settings.path) || "",
-          busy: false,
-          error: null,
-          saved: false,
-        });
-      })
-      .catch((err) => {
-        syncFolder.update((s) => ({ ...s, loading: false, error: "generic" }));
-        console.error(err);
-      });
-  }
 
   let syncStatus = null;
   let syncStatusLoading = true;
@@ -114,56 +87,54 @@
 
 <h3 class="mb-2.5 text-xs font-bold uppercase tracking-wide text-muted">{t("dashboard.syncStatusTitle")}</h3>
 <PanelCard maxWidth={true}>
-  {#if $syncFolder.loading && !$syncFolder.loaded}
+  <div class="flex items-center justify-between py-1.5 text-sm">
+    <span class="text-muted">{t("dashboard.syncStatusLabel")}</span>
+    {#if syncStatus && syncStatus.inProgress}
+      <span class="rounded-full bg-brand/[0.12] px-2.5 py-0.5 text-xs font-semibold text-brand-dark">
+        {t("dashboard.syncStatusInProgress")}
+      </span>
+    {:else if syncStatus?.enabled}
+      <span class="rounded-full bg-success-bg px-2.5 py-0.5 text-xs font-semibold text-success">
+        {t("dashboard.syncStatusActive")}
+      </span>
+    {:else}
+      <span class="rounded-full bg-danger-bg px-2.5 py-0.5 text-xs font-semibold text-danger">
+        {t("dashboard.syncStatusInactive")}
+      </span>
+    {/if}
+  </div>
+
+  {#if syncStatusLoading}
     <Banner kind="status">{t("common.loading")}</Banner>
-  {:else if $syncFolder.error}
-    <Banner kind="error">{errorMessage($syncFolder.error)}</Banner>
-  {:else}
+  {:else if syncStatusError}
+    <Banner kind="error">{errorMessage(syncStatusError)}</Banner>
+  {:else if syncStatus}
     <div class="flex items-center justify-between py-1.5 text-sm">
-      <span class="text-muted">{t("dashboard.syncStatusLabel")}</span>
-      {#if syncStatus && syncStatus.inProgress}
-        <span class="rounded-full bg-brand/[0.12] px-2.5 py-0.5 text-xs font-semibold text-brand-dark">
-          {t("dashboard.syncStatusInProgress")}
-        </span>
-      {:else if syncStatus?.enabled}
-        <span class="rounded-full bg-success-bg px-2.5 py-0.5 text-xs font-semibold text-success">
-          {t("dashboard.syncStatusActive")}
-        </span>
-      {:else}
-        <span class="rounded-full bg-danger-bg px-2.5 py-0.5 text-xs font-semibold text-danger">
-          {t("dashboard.syncStatusInactive")}
-        </span>
-      {/if}
+      <span class="text-muted">{t("dashboard.lastSyncLabel")}</span>
+      <span class="font-semibold">{lastSyncedDisplay}</span>
     </div>
     <div class="flex items-center justify-between py-1.5 text-sm">
-      <span class="text-muted">{t("syncFolder.currentPath")}</span>
-      <span class="font-semibold">{$syncFolder.path || t("syncSetup.noneChosen")}</span>
+      <span class="text-muted">{t("dashboard.remoteItemsLabel")}</span>
+      <span class="font-semibold">{syncStatus.remoteItems}</span>
+    </div>
+    <div class="flex items-center justify-between py-1.5 text-sm">
+      <span class="text-muted">{t("dashboard.localItemsLabel")}</span>
+      <span class="font-semibold">{syncStatus.localItems}</span>
+    </div>
+    <div class="flex items-center justify-between py-1.5 text-sm">
+      <span class="text-muted">{t("dashboard.missingOnServerLabel")}</span>
+      <span class="font-semibold">{syncStatus.missingOnServer}</span>
+    </div>
+    <div class="flex items-center justify-between py-1.5 text-sm">
+      <span class="text-muted">{t("dashboard.missingLocallyLabel")}</span>
+      <span class="font-semibold">{syncStatus.missingLocally}</span>
     </div>
 
-    {#if syncStatusLoading}
-      <Banner kind="status">{t("common.loading")}</Banner>
-    {:else if syncStatusError}
-      <Banner kind="error">{errorMessage(syncStatusError)}</Banner>
-    {:else if syncStatus}
-      <div class="flex items-center justify-between py-1.5 text-sm">
-        <span class="text-muted">{t("dashboard.lastSyncLabel")}</span>
-        <span class="font-semibold">{lastSyncedDisplay}</span>
+    {#if syncStatus.lastError}
+      <div class="mt-4 rounded border border-danger-border bg-danger-bg px-3 py-2.5 text-sm text-danger">
+        <p class="mb-1 font-semibold">{t("dashboard.syncErrorsTitle")}</p>
+        <p class="break-words">{syncStatus.lastError}</p>
       </div>
-      <div class="flex items-center justify-between py-1.5 text-sm">
-        <span class="text-muted">{t("dashboard.missingLocallyLabel")}</span>
-        <span class="font-semibold">{syncStatus.missingLocally}</span>
-      </div>
-      <div class="flex items-center justify-between py-1.5 text-sm">
-        <span class="text-muted">{t("dashboard.remoteItemsLabel")}</span>
-        <span class="font-semibold">{syncStatus.remoteItems}</span>
-      </div>
-
-      {#if syncStatus.lastError}
-        <div class="mt-4 rounded border border-danger-border bg-danger-bg px-3 py-2.5 text-sm text-danger">
-          <p class="mb-1 font-semibold">{t("dashboard.syncErrorsTitle")}</p>
-          <p class="break-words">{syncStatus.lastError}</p>
-        </div>
-      {/if}
     {/if}
   {/if}
 </PanelCard>

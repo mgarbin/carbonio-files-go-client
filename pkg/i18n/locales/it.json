@@ -40,6 +40,8 @@
   "dashboard.syncNeverRun": "Mai eseguita",
   "dashboard.missingLocallyLabel": "Elementi mancanti in locale",
   "dashboard.remoteItemsLabel": "Elementi trovati sul server",
+  "dashboard.localItemsLabel": "Elementi trovati in locale",
+  "dashboard.missingOnServerLabel": "Elementi mancanti sul server",
   "dashboard.syncErrorsTitle": "Errori di sincronizzazione",
   "auth.panelTitle": "Autenticazione",
   "auth.serverLabel": "Server",

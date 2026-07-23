@@ -48,7 +48,12 @@ func NewSqliteHelper(dbPath string) (*SqliteHelper, error) {
 		file.Close()
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
+	// busy_timeout: this file is opened from multiple goroutines (the
+	// background sync job vs. foreground requests) and, for file_sync_cache.db,
+	// potentially multiple SqliteHelper instances opened back-to-back - a brief
+	// write collision must retry instead of failing outright with
+	// SQLITE_BUSY ("database is locked").
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("impossibile aprire il db: %w", err)
 	}

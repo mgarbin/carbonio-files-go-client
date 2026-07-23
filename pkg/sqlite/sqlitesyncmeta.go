@@ -65,6 +65,15 @@ func (h *SqliteHelper) CountRemotePresent() (int, error) {
 	return count, err
 }
 
+// CountLocalPresent returns the number of filesync records currently known
+// to exist on this device (a local_path was recorded and it hasn't been
+// flagged as locally deleted).
+func (h *SqliteHelper) CountLocalPresent() (int, error) {
+	var count int
+	err := h.DB.QueryRow(`SELECT COUNT(*) FROM filesync WHERE local_path != '' AND local_deleted = 0`).Scan(&count)
+	return count, err
+}
+
 // CountPendingChanges returns how many filesync records still need
 // reconciling by LiveCacheSync: items only present on one side
 // (remote_only/local_only), out-of-sync content, or a deletion on one side

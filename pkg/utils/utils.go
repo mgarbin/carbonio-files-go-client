@@ -22,7 +22,7 @@ func RecursiveListNodeItems(graphqlAuthenticator *graphql.GraphQLAuthenticator, 
 
 	nodes, nodesErr := graphqlAuthenticator.GetAllNode(id, "NAME_ASC", nil, nil)
 	if nodesErr != nil {
-		panic(nodesErr)
+		return nil, nodesErr
 	}
 
 	for _, child := range nodes {

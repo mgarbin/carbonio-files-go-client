@@ -34,7 +34,7 @@ func TestSyncMetaCRUD(t *testing.T) {
 	}
 }
 
-func TestCountBySyncStatusAndRemotePresent(t *testing.T) {
+func TestCountBySyncStatusAndPresence(t *testing.T) {
 	h, _ := newTestHelper(t)
 
 	rows := []struct {
@@ -42,14 +42,17 @@ func TestCountBySyncStatusAndRemotePresent(t *testing.T) {
 		localPath     string
 		syncStatus    string
 		remoteDeleted int
+		localDeleted  int
 	}{
-		{"/a.txt", "/local/a.txt", "remote_only", 0},
-		{"/b.txt", "/local/b.txt", "remote_only", 0},
-		{"/c.txt", "/local/c.txt", "synced", 0},
-		{"/d.txt", "/local/d.txt", "remote_deleted", 1}, // no longer present remotely
+		{"/a.txt", "/local/a.txt", "remote_only", 0, 0},
+		{"/b.txt", "/local/b.txt", "remote_only", 0, 0},
+		{"/c.txt", "/local/c.txt", "synced", 0, 0},
+		{"/d.txt", "/local/d.txt", "remote_deleted", 1, 0}, // no longer present remotely
+		{"", "/local/e.txt", "local_only", 0, 0},           // present locally, never seen remotely
+		{"/f.txt", "/local/f.txt", "local_deleted", 0, 1},  // local copy removed, remote still present
 	}
 	for _, r := range rows {
-		if _, err := h.InsertFileSync("node-"+r.remotePath, "", r.remotePath, "", r.localPath, "", false, "", "", 0, 0, "", "", r.syncStatus, "", 0, r.remoteDeleted); err != nil {
+		if _, err := h.InsertFileSync("node-"+r.remotePath, "", r.remotePath, "", r.localPath, "", false, "", "", 0, 0, "", "", r.syncStatus, "", r.localDeleted, r.remoteDeleted); err != nil {
 			t.Fatalf("InsertFileSync(%s): %v", r.remotePath, err)
 		}
 	}
@@ -60,9 +63,16 @@ func TestCountBySyncStatusAndRemotePresent(t *testing.T) {
 	if got, err := h.CountBySyncStatus("synced"); err != nil || got != 1 {
 		t.Fatalf("CountBySyncStatus(synced) = (%d, %v), want (1, nil)", got, err)
 	}
-	// a, b, c are present remotely; d is flagged remote_deleted.
-	if got, err := h.CountRemotePresent(); err != nil || got != 3 {
-		t.Fatalf("CountRemotePresent() = (%d, %v), want (3, nil)", got, err)
+	if got, err := h.CountBySyncStatus("local_only"); err != nil || got != 1 {
+		t.Fatalf("CountBySyncStatus(local_only) = (%d, %v), want (1, nil)", got, err)
+	}
+	// a, b, c, f are present remotely; d is flagged remote_deleted; e has no remote_path.
+	if got, err := h.CountRemotePresent(); err != nil || got != 4 {
+		t.Fatalf("CountRemotePresent() = (%d, %v), want (4, nil)", got, err)
+	}
+	// a, b, c, d, e are present locally; f is flagged locally deleted.
+	if got, err := h.CountLocalPresent(); err != nil || got != 5 {
+		t.Fatalf("CountLocalPresent() = (%d, %v), want (5, nil)", got, err)
 	}
 }
 
