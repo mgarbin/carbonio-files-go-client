@@ -8,8 +8,8 @@ singleton `config` table (`id` is always `1`). `Password` and `AuthToken` are
 encrypted at rest with AES-256-GCM before being written; every other field
 (`endpoint`, `username`, `files_local_folder`, `log_level`, `log_format`,
 `log_output`, `log_path`) is stored as plain text. This is
-exactly the mechanism both the [CLI](usage.md) (`./file_sync_cache.db`) and
-the [desktop GUI](desktop-gui.md) (its own `gui-config.db`) use to remember
+exactly the mechanism both the [CLI](usage.md) (`file_sync_cache.db`) and
+the [desktop GUI](desktop-gui.md) (`gui-config.db`) use to remember
 your login across runs/launches and to cache the `ZM_AUTH_TOKEN`.
 
 `AuthToken` specifically is managed by `carbonio.Session`
@@ -32,7 +32,7 @@ The AES-256 key is generated on first use and stored next to the database as
 copy of the database alone cannot be decrypted.
 
 ```go
-h, err := sqlitecache.NewSqliteHelper("./file_sync_cache.db")
+h, err := sqlitecache.NewSqliteHelper(appdir.Path("file_sync_cache.db"))
 
 err = h.CreateConfig(sqlitecache.ConfigRecord{
     Endpoint:  "mail.example.com",

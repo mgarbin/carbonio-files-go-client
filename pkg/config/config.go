@@ -30,7 +30,7 @@ type LoggingConfig struct {
 	// Output is "console", "file" or "both". Default "console".
 	Output string `yaml:"output"`
 	// Path is the log file path, used when Output is "file" or "both".
-	// Default "logs/carbonio-files-go-client.log".
+	// Default "<home>/.carbonio_files_sync/carbonio-files-go-client.log".
 	Path string `yaml:"path"`
 }
 

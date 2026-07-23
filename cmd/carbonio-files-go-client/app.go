@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"carbonio-files-go-client/pkg/appdir"
 	"carbonio-files-go-client/pkg/carbonio"
 	"carbonio-files-go-client/pkg/i18n"
 	"carbonio-files-go-client/pkg/logger"
@@ -321,17 +322,11 @@ func (a *App) SetSyncFolder(path string) error {
 }
 
 // configDBPath returns the per-user path of the GUI's encrypted credential
-// store, independent of the process' current working directory.
+// store, independent of the process' current working directory: it lives
+// alongside the CLI's cache database and the log file under
+// appdir.Dir() ("<home>/.carbonio_files_sync").
 func configDBPath() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
-	}
-	dir = filepath.Join(dir, "carbonio-files-client")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "gui-config.db"), nil
+	return appdir.Path("gui-config.db"), nil
 }
 
 // Init is called once by the frontend right after the runtime is ready. It

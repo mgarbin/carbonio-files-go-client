@@ -18,6 +18,7 @@ import (
 
 	"carbonio-files-go-client/img"
 	"carbonio-files-go-client/pkg/actions"
+	"carbonio-files-go-client/pkg/appdir"
 	"carbonio-files-go-client/pkg/carbonio"
 	"carbonio-files-go-client/pkg/config"
 	"carbonio-files-go-client/pkg/logger"
@@ -182,7 +183,7 @@ func runCLI() {
 	logLevel := flag.String("logLevel", "", "Log level: trace, debug, info, warn, error, fatal, panic, disabled (default: info, or config.yaml Logging.level)")
 	logFormat := flag.String("logFormat", "", "Log format: console or json (default: console, or config.yaml Logging.format)")
 	logOutput := flag.String("logOutput", "", "Log output: console, file or both (default: console, or config.yaml Logging.output)")
-	logPath := flag.String("logPath", "", "Log file path, used when -logOutput is file or both (default: logs/carbonio-files-go-client.log, or config.yaml Logging.path)")
+	logPath := flag.String("logPath", "", "Log file path, used when -logOutput is file or both (default: <home>/.carbonio_files_sync/carbonio-files-go-client.log, or config.yaml Logging.path)")
 
 	flag.Parse()
 
@@ -305,13 +306,14 @@ func runCLI() {
 }
 
 // loginWithCachedToken opens the CLI's encrypted token store
-// (./file_sync_cache.db, the same SQLite database the -*CacheSync flags
-// use) and obtains a ZM_AUTH_TOKEN through carbonio.Session: a token saved
-// from a previous run is reused as-is when the server still accepts it,
-// otherwise a fresh username/password login is performed and its token is
-// persisted (encrypted at rest) for the next run to reuse.
+// (appdir.Path("file_sync_cache.db"), the same SQLite database the
+// -*CacheSync flags use) and obtains a ZM_AUTH_TOKEN through
+// carbonio.Session: a token saved from a previous run is reused as-is when
+// the server still accepts it, otherwise a fresh username/password login is
+// performed and its token is persisted (encrypted at rest) for the next run
+// to reuse.
 func loginWithCachedToken(auth *carbonio.HTTPAuthenticator, username, password string) (string, error) {
-	store, err := sqlitecache.NewSqliteHelper("./file_sync_cache.db")
+	store, err := sqlitecache.NewSqliteHelper(appdir.Path("file_sync_cache.db"))
 	if err != nil {
 		return "", fmt.Errorf("opening token store: %w", err)
 	}

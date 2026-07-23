@@ -4,6 +4,7 @@
 package actions
 
 import (
+	"carbonio-files-go-client/pkg/appdir"
 	"carbonio-files-go-client/pkg/carbonio"
 	"carbonio-files-go-client/pkg/graphql"
 	"carbonio-files-go-client/pkg/localfs"
@@ -188,7 +189,7 @@ func LiveSyncCheck(endpoint, authToken, localFolder string, cacheSync bool) erro
 func UpdateCacheSync(endpoint, authToken, localFolder string) error {
 
 	// Initialize SQLite database
-	newdb, err := sqlitecache.NewSqliteHelper("./file_sync_cache.db")
+	newdb, err := sqlitecache.NewSqliteHelper(appdir.Path("file_sync_cache.db"))
 	if err != nil {
 		log.Error().Err(err).Msg("Opening sqlite cache failed")
 		return err
@@ -437,7 +438,7 @@ func UpdateCacheSync(endpoint, authToken, localFolder string) error {
 func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbonio.HTTPAuthenticator) error {
 
 	// Open the existing SQLite cache database
-	cacheDb, err := sqlitecache.NewSqliteHelper("./file_sync_cache.db")
+	cacheDb, err := sqlitecache.NewSqliteHelper(appdir.Path("file_sync_cache.db"))
 	if err != nil {
 		log.Error().Err(err).Msg("Opening cache failed")
 		return err

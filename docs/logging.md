@@ -11,8 +11,8 @@ configured independently along two axes:
 
 Precedence for the CLI (`-cli`) is `-logLevel`/`-logFormat`/`-logOutput`/`-logPath`
 flags > the `Logging` section of `config.yaml` > built-in defaults
-(`info` / `console` / `console` / `logs/carbonio-files-go-client.log`). The log
-file's parent directory is created automatically if it doesn't exist.
+(`info` / `console` / `console` / `<home>/.carbonio_files_sync/carbonio-files-go-client.log`).
+The log file's parent directory is created automatically if it doesn't exist.
 
 ```bash
 # JSON logs written to a file, nothing on the console

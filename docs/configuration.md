@@ -16,7 +16,7 @@ Logging:
 #  level: "info"      # trace, debug, info, warn, error, fatal, panic, disabled (default: info)
 #  format: "console"  # "console" (human-readable, colorized) or "json" (default: console)
 #  output: "console"  # "console", "file" or "both" (default: console)
-#  path: "logs/carbonio-files-go-client.log"  # log file path, used when output is "file" or "both"
+#  path: "<home>/.carbonio_files_sync/carbonio-files-go-client.log"  # log file path, used when output is "file" or "both"
 ```
 
 When `AuthToken` is set in `config.yaml`, it is used verbatim and neither the
@@ -24,7 +24,7 @@ cached-token store nor the login step ever runs - use this only for a
 token you manage yourself. Leave it unset (the default) to get automatic
 token caching instead: the first run logs in with `username`/`password` and
 saves the resulting `ZM_AUTH_TOKEN` encrypted at rest in
-`./file_sync_cache.db` (see [Configuration storage (SQLite)](configuration-storage-sqlite.md));
+`<home>/.carbonio_files_sync/file_sync_cache.db` (see [Configuration storage (SQLite)](configuration-storage-sqlite.md));
 every following run reuses that token - skipping the password login
 entirely - for as long as the server keeps accepting it, and transparently
 re-authenticates with `username`/`password` (persisting the refreshed

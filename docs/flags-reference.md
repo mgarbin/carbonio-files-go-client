@@ -26,4 +26,4 @@
 | `-logLevel` | string | Log level: trace, debug, info, warn, error, fatal, panic, disabled (default: info, or `config.yaml` `Logging.level`) |
 | `-logFormat` | string | Log format: console or json (default: console, or `config.yaml` `Logging.format`) |
 | `-logOutput` | string | Log output: console, file or both (default: console, or `config.yaml` `Logging.output`) |
-| `-logPath` | string | Log file path, used when `-logOutput` is file or both (default: `logs/carbonio-files-go-client.log`, or `config.yaml` `Logging.path`) |
+| `-logPath` | string | Log file path, used when `-logOutput` is file or both (default: `<home>/.carbonio_files_sync/carbonio-files-go-client.log`, or `config.yaml` `Logging.path`) |

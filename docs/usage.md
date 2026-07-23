@@ -8,7 +8,7 @@
 
 Every flag below requires the top-level `-cli` flag: it is what unlocks the command-line interface. Running the binary with any other flag but without `-cli` is rejected; running it with no arguments at all opens the GUI instead (see [Desktop GUI](desktop-gui.md)).
 
-**Authentication**: unless `config.yaml` sets an explicit `AuthToken` override, every `-cli` run reuses the `ZM_AUTH_TOKEN` cached (encrypted at rest) from the previous run in `./file_sync_cache.db` — no login round-trip — for as long as the server still accepts it, and transparently re-authenticates with `username`/`password` (persisting the refreshed token) the moment it doesn't. See [Configuration storage (SQLite)](configuration-storage-sqlite.md).
+**Authentication**: unless `config.yaml` sets an explicit `AuthToken` override, every `-cli` run reuses the `ZM_AUTH_TOKEN` cached (encrypted at rest) from the previous run in `<home>/.carbonio_files_sync/file_sync_cache.db` — no login round-trip — for as long as the server still accepts it, and transparently re-authenticates with `username`/`password` (persisting the refreshed token) the moment it doesn't. See [Configuration storage (SQLite)](configuration-storage-sqlite.md).
 
 Print all available flags:
 
@@ -97,7 +97,7 @@ Differences reported include: missing paths, digest mismatches, size differences
 
 ### Update the sync cache
 
-Populate the SQLite cache database (`./file_sync_cache.db`) with the current state of both local and remote files. Run this before any `-liveCacheSync`:
+Populate the SQLite cache database (`<home>/.carbonio_files_sync/file_sync_cache.db`) with the current state of both local and remote files. Run this before any `-liveCacheSync`:
 
 ```bash
 ./carbonio-files-client -cli -updateCacheSync

@@ -5,6 +5,7 @@
 package logger
 
 import (
+	"carbonio-files-go-client/pkg/appdir"
 	"fmt"
 	"io"
 	"os"
@@ -41,8 +42,8 @@ const (
 )
 
 // DefaultPath is the log file path used when Config.FilePath is empty and a
-// file writer is required (Output file/both).
-const DefaultPath = "logs/carbonio-files-go-client.log"
+// file writer is required (Output file/both): "<home>/.carbonio_files_sync/carbonio-files-go-client.log".
+var DefaultPath = appdir.Path("carbonio-files-go-client.log")
 
 // Config drives Init. Zero-value fields fall back to sane defaults, so a
 // zero Config produces console/info logging - the same output the binary
