@@ -120,3 +120,11 @@ The sync proceeds in phases:
 out_of_sync function use compare algorithm with **digest / file size / modify timestamp**.
 
 The cache database is updated after each operation.
+
+### Update cache and sync in one step
+
+Run `-updateCacheSync` followed by `-liveCacheSync` in a single command, useful for unattended/scheduled runs:
+
+```bash
+./carbonio-files-client -cli -fullCacheSync
+```

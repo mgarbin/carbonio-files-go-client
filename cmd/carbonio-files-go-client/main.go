@@ -171,6 +171,7 @@ func runCLI() {
 	cacheSync := flag.Bool("cacheSync", false, "Use this flag to enable sqlite cache for liveSyncCheck")
 	updateCacheSync := flag.Bool("updateCacheSync", false, "Use this flag to initialize sqlite cache for liveSyncCheck and update file records with local and remote info")
 	liveCacheSync := flag.Bool("liveCacheSync", false, "Use this flag to sync local and remote files using the sqlite cache db")
+	fullCacheSync := flag.Bool("fullCacheSync", false, "Use this flag to run updateCacheSync followed by liveCacheSync in one step")
 	moveNodes := flag.Bool("moveNodes", false, "Use this flag to move nodes to a new destination")
 	deleteNodes := flag.Bool("deleteNodes", false, "Use this flag to delete nodes")
 	destinationId := flag.String("destinationId", "", "Use this flag to specify the destination folder id for moveNodes")
@@ -296,6 +297,12 @@ func runCLI() {
 
 	if *liveCacheSync {
 		if err := actions.LiveCacheSync(cfg.Main.Endpoint, *zmAuthToken, localFolder, carbonioAuth); err != nil {
+			return
+		}
+	}
+
+	if *fullCacheSync {
+		if err := actions.FullCacheSync(cfg.Main.Endpoint, *zmAuthToken, localFolder, carbonioAuth); err != nil {
 			return
 		}
 	}

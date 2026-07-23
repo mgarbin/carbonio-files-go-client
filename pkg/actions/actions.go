@@ -836,3 +836,21 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 	log.Info().Msg("liveCacheSync completed")
 	return nil
 }
+
+// FullCacheSync runs UpdateCacheSync followed by LiveCacheSync against
+// localFolder: it first (re)builds the sqlite sync cache from the current
+// local/remote state, then performs the bidirectional sync using that
+// freshly updated cache. Backs the -fullCacheSync flag. A non-nil error
+// means the caller should abort, the message has already been printed.
+func FullCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbonio.HTTPAuthenticator) error {
+	if err := UpdateCacheSync(endpoint, authToken, localFolder); err != nil {
+		return err
+	}
+
+	if err := LiveCacheSync(endpoint, authToken, localFolder, carbonioAuth); err != nil {
+		return err
+	}
+
+	log.Info().Msg("fullCacheSync completed")
+	return nil
+}

@@ -16,6 +16,7 @@
 | `-liveSyncCheck` | bool | Compare local and remote without making changes |
 | `-updateCacheSync` | bool | Update the SQLite sync cache (run before any `-liveSyncCheck`)|
 | `-liveCacheSync` | bool | Perform bidirectional sync using the cache |
+| `-fullCacheSync` | bool | Run `-updateCacheSync` followed by `-liveCacheSync` in one step |
 | `-parentId` | string | Parent folder node ID (used with upload/create operations) |
 | `-nodeId` | string | Node ID (used with `-uploadNewVersionFile`) |
 | `-nodesIdList` | string | Comma-separated list of node IDs |
