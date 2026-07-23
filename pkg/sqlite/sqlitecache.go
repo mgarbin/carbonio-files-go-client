@@ -102,6 +102,13 @@ func NewSqliteHelper(dbPath string) (*SqliteHelper, error) {
 		}
 	}
 
+	// Ensure the sync_meta table exists (tracks the last UpdateCacheSync run
+	// for the GUI dashboard's sync status panel).
+	if err := ensureSyncMetaTable(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("errore creando la tabella sync_meta: %w", err)
+	}
+
 	// Ensure the config table exists and load/generate the key used to
 	// encrypt the sensitive configuration fields.
 	if err := ensureConfigTable(db); err != nil {

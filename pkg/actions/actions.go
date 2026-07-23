@@ -185,8 +185,41 @@ func LiveSyncCheck(endpoint, authToken, localFolder string, cacheSync bool) erro
 // UpdateCacheSync initializes (or refreshes) the sqlite sync cache with the
 // current local/remote state. Backs the -updateCacheSync flag. A non-nil
 // error means the caller should abort, the message has already been
-// printed.
+// printed. The outcome (timestamp + error, if any) is persisted to the
+// cache's sync_meta table via recordCacheSyncRun so the GUI dashboard can
+// display "last sync" time and surface the last error without re-running
+// the scan.
 func UpdateCacheSync(endpoint, authToken, localFolder string) error {
+	err := updateCacheSync(endpoint, authToken, localFolder)
+	recordCacheSyncRun(err)
+	return err
+}
+
+// recordCacheSyncRun best-effort persists the outcome of the most recent
+// UpdateCacheSync run to the sqlite cache's sync_meta table. Failures here
+// are only logged: they must never override the original runErr returned
+// to UpdateCacheSync's caller.
+func recordCacheSyncRun(runErr error) {
+	newdb, err := sqlitecache.NewSqliteHelper(appdir.Path("file_sync_cache.db"))
+	if err != nil {
+		log.Error().Err(err).Msg("Opening sqlite cache failed while recording sync run result")
+		return
+	}
+	defer newdb.Close()
+
+	errMsg := ""
+	if runErr != nil {
+		errMsg = runErr.Error()
+	}
+	if err := newdb.SetSyncRunResult(time.Now().Format(time.RFC3339), errMsg); err != nil {
+		log.Warn().Err(err).Msg("Persisting sync run result failed")
+	}
+}
+
+// updateCacheSync is UpdateCacheSync's implementation, wrapped so every
+// return path - including the early ones below - gets its outcome recorded
+// by recordCacheSyncRun without threading that call through each one.
+func updateCacheSync(endpoint, authToken, localFolder string) error {
 
 	// Initialize SQLite database
 	newdb, err := sqlitecache.NewSqliteHelper(appdir.Path("file_sync_cache.db"))

@@ -34,8 +34,13 @@ type ConfigRecord struct {
 	LogFormat string
 	LogOutput string
 	LogPath   string
-	CreatedAt string
-	UpdatedAt string
+	// SyncEnabled persists the dashboard's sync on/off decision (the
+	// "Avvia Sincronizzazione" / "Ferma Sincronizzazione" toggle) so it
+	// survives an app restart: true means the periodic background sync
+	// job must resume automatically on the next login.
+	SyncEnabled bool
+	CreatedAt   string
+	UpdatedAt   string
 }
 
 var (
@@ -61,6 +66,7 @@ func ensureConfigTable(db *sql.DB) error {
 		log_format TEXT NOT NULL DEFAULT '',
 		log_output TEXT NOT NULL DEFAULT '',
 		log_path TEXT NOT NULL DEFAULT '',
+		sync_enabled INTEGER NOT NULL DEFAULT 0,
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL
 	);`
@@ -73,6 +79,10 @@ func ensureConfigTable(db *sql.DB) error {
 		if err := addColumnIfMissing(db, "config", col, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			return err
 		}
+	}
+	// Migrate databases created before the sync on/off toggle existed.
+	if err := addColumnIfMissing(db, "config", "sync_enabled", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
 	}
 	return nil
 }
@@ -203,9 +213,9 @@ func (h *SqliteHelper) CreateConfig(cfg ConfigRecord) error {
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err = h.DB.Exec(
-		`INSERT INTO config (id, endpoint, username, password_enc, auth_token_enc, files_local_folder, log_level, log_format, log_output, log_path, created_at, updated_at)
-		 VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		cfg.Endpoint, cfg.Username, passwordEnc, authTokenEnc, cfg.FilesLocalFolder, cfg.LogLevel, cfg.LogFormat, cfg.LogOutput, cfg.LogPath, now, now,
+		`INSERT INTO config (id, endpoint, username, password_enc, auth_token_enc, files_local_folder, log_level, log_format, log_output, log_path, sync_enabled, created_at, updated_at)
+		 VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		cfg.Endpoint, cfg.Username, passwordEnc, authTokenEnc, cfg.FilesLocalFolder, cfg.LogLevel, cfg.LogFormat, cfg.LogOutput, cfg.LogPath, cfg.SyncEnabled, now, now,
 	)
 	if err != nil {
 		if isConstraintErr(err) {
@@ -220,19 +230,21 @@ func (h *SqliteHelper) CreateConfig(cfg ConfigRecord) error {
 // authToken. Returns (nil, nil) if no configuration has been saved yet.
 func (h *SqliteHelper) GetConfig() (*ConfigRecord, error) {
 	row := h.DB.QueryRow(
-		`SELECT endpoint, username, password_enc, auth_token_enc, files_local_folder, log_level, log_format, log_output, log_path, created_at, updated_at
+		`SELECT endpoint, username, password_enc, auth_token_enc, files_local_folder, log_level, log_format, log_output, log_path, sync_enabled, created_at, updated_at
 		 FROM config WHERE id = 1`,
 	)
 
 	var cfg ConfigRecord
 	var passwordEnc, authTokenEnc []byte
-	err := row.Scan(&cfg.Endpoint, &cfg.Username, &passwordEnc, &authTokenEnc, &cfg.FilesLocalFolder, &cfg.LogLevel, &cfg.LogFormat, &cfg.LogOutput, &cfg.LogPath, &cfg.CreatedAt, &cfg.UpdatedAt)
+	var syncEnabledInt int
+	err := row.Scan(&cfg.Endpoint, &cfg.Username, &passwordEnc, &authTokenEnc, &cfg.FilesLocalFolder, &cfg.LogLevel, &cfg.LogFormat, &cfg.LogOutput, &cfg.LogPath, &syncEnabledInt, &cfg.CreatedAt, &cfg.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("error reading configuration: %w", err)
 	}
+	cfg.SyncEnabled = syncEnabledInt != 0
 
 	if cfg.Password, err = h.decryptSecret(passwordEnc); err != nil {
 		return nil, err
@@ -257,9 +269,9 @@ func (h *SqliteHelper) UpdateConfig(cfg ConfigRecord) error {
 	}
 
 	res, err := h.DB.Exec(
-		`UPDATE config SET endpoint = ?, username = ?, password_enc = ?, auth_token_enc = ?, files_local_folder = ?, log_level = ?, log_format = ?, log_output = ?, log_path = ?, updated_at = ?
+		`UPDATE config SET endpoint = ?, username = ?, password_enc = ?, auth_token_enc = ?, files_local_folder = ?, log_level = ?, log_format = ?, log_output = ?, log_path = ?, sync_enabled = ?, updated_at = ?
 		 WHERE id = 1`,
-		cfg.Endpoint, cfg.Username, passwordEnc, authTokenEnc, cfg.FilesLocalFolder, cfg.LogLevel, cfg.LogFormat, cfg.LogOutput, cfg.LogPath, time.Now().UTC().Format(time.RFC3339),
+		cfg.Endpoint, cfg.Username, passwordEnc, authTokenEnc, cfg.FilesLocalFolder, cfg.LogLevel, cfg.LogFormat, cfg.LogOutput, cfg.LogPath, cfg.SyncEnabled, time.Now().UTC().Format(time.RFC3339),
 	)
 	if err != nil {
 		return fmt.Errorf("error updating configuration: %w", err)

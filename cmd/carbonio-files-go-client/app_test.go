@@ -6,9 +6,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"carbonio-files-go-client/pkg/carbonio"
 	"carbonio-files-go-client/pkg/logger"
@@ -148,6 +150,10 @@ func TestApp_SyncFolderSetupWizard(t *testing.T) {
 
 	app := openTestApp(t, dbPath)
 	defer app.db.Close()
+	// Login() now starts the background sync job once a folder is
+	// configured (see maybeStartBackgroundSync): stop it so the test
+	// doesn't leak a running goroutine past t's lifetime.
+	defer app.stopBackgroundSync()
 
 	// Before any login/config exists, no sync folder is configured.
 	if got := app.GetSyncFolder(); got.Path != "" {
@@ -439,5 +445,323 @@ func TestApp_InitReauthenticatesWhenServerRejectsCachedToken(t *testing.T) {
 	}
 	if got := loginCalls.Load(); got != 2 {
 		t.Fatalf("login endpoint called %d times, want 2 (initial Login() plus the automatic re-login)", got)
+	}
+}
+
+// TestApp_StartFullSyncRequiresPriorLoginAndFolder backs the dashboard's
+// "Avvia Sincronizzazione" button: it must refuse to run before the user
+// is logged in, and before a sync folder has been configured, without
+// ever reaching the network (both checks return before actions.FullCacheSync
+// is called).
+func TestApp_StartFullSyncRequiresPriorLoginAndFolder(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gui-config.db")
+	app := openTestApp(t, dbPath)
+	defer app.db.Close()
+
+	if err := app.StartFullSync(); err == nil {
+		t.Fatalf("StartFullSync() before login = nil error, want an error")
+	}
+
+	const user, pass = "user@example.com", "s3cret"
+	endpoint := newFakeCarbonioServer(t, user, pass)
+	if result := app.Login(endpoint, user, pass); !result.Success {
+		t.Fatalf("Login() = %+v, want Success=true", result)
+	}
+
+	if err := app.StartFullSync(); err == nil {
+		t.Fatalf("StartFullSync() before a sync folder is configured = nil error, want an error")
+	}
+}
+
+// TestApp_BackgroundSyncJobLifecycle covers maybeStartBackgroundSync /
+// stopBackgroundSync's gating and idempotency: the periodic job must only
+// start once a session, a sync folder, and the persisted SyncEnabled
+// preference are all available, starting it again while already running
+// must not spawn a second loop, and Logout must stop it. It never waits
+// for a tick (backgroundSyncInterval is 5 minutes): only the start/stop
+// wiring around App.syncJobCancel is under test.
+func TestApp_BackgroundSyncJobLifecycle(t *testing.T) {
+	const user, pass = "user@example.com", "s3cret"
+	endpoint := newFakeCarbonioServer(t, user, pass)
+	dbPath := filepath.Join(t.TempDir(), "gui-config.db")
+
+	app := openTestApp(t, dbPath)
+	defer app.db.Close()
+	defer app.stopBackgroundSync()
+
+	// No session yet: must not start.
+	app.maybeStartBackgroundSync()
+	if app.syncJobCancel != nil {
+		t.Fatalf("maybeStartBackgroundSync() started the job without a session")
+	}
+
+	if result := app.Login(endpoint, user, pass); !result.Success {
+		t.Fatalf("Login() = %+v, want Success=true", result)
+	}
+	// Login() calls maybeStartBackgroundSync() itself, but no sync folder
+	// is configured yet: it must still no-op.
+	if app.syncJobCancel != nil {
+		t.Fatalf("Login() started the background job before a sync folder was configured")
+	}
+
+	syncDir := filepath.Join(t.TempDir(), "carbonio-sync")
+	if err := app.SetSyncFolder(syncDir); err != nil {
+		t.Fatalf("SetSyncFolder() error = %v", err)
+	}
+	// A folder is now configured, but sync was never enabled: it must
+	// still no-op (default is disabled - see ConfigRecord.SyncEnabled).
+	app.maybeStartBackgroundSync()
+	if app.syncJobCancel != nil {
+		t.Fatalf("maybeStartBackgroundSync() started the job while SyncEnabled was still false")
+	}
+
+	// Enabling it persists the preference and must start the job.
+	if err := app.SetSyncEnabled(true); err != nil {
+		t.Fatalf("SetSyncEnabled(true) error = %v", err)
+	}
+	if app.syncJobCancel == nil {
+		t.Fatalf("SetSyncEnabled(true) did not start the background job")
+	}
+
+	// Idempotent: calling it again while already running must not replace
+	// the running job (no second goroutine/ticker spawned).
+	firstCancel := reflect.ValueOf(app.syncJobCancel).Pointer()
+	app.maybeStartBackgroundSync()
+	if reflect.ValueOf(app.syncJobCancel).Pointer() != firstCancel {
+		t.Fatalf("maybeStartBackgroundSync() replaced the already-running job")
+	}
+
+	app.stopBackgroundSync()
+	if app.syncJobCancel != nil {
+		t.Fatalf("stopBackgroundSync() did not clear syncJobCancel")
+	}
+	// Idempotent: stopping an already-stopped job must not panic.
+	app.stopBackgroundSync()
+
+	// Logout must also stop it.
+	app.maybeStartBackgroundSync()
+	if app.syncJobCancel == nil {
+		t.Fatalf("maybeStartBackgroundSync() did not restart the job")
+	}
+	if err := app.Logout(); err != nil {
+		t.Fatalf("Logout() error = %v", err)
+	}
+	if app.syncJobCancel != nil {
+		t.Fatalf("Logout() did not stop the background sync job")
+	}
+}
+
+// TestApp_GetSyncStatusReportsInProgress verifies GetSyncStatus surfaces
+// the syncing flag as InProgress - this is what lets the dashboard show
+// "In corso" while a sync (StartFullSync, the initial scan, or a
+// background cycle) is actively running, independent of whatever the
+// cache DB currently contains.
+func TestApp_GetSyncStatusReportsInProgress(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gui-config.db")
+	app := openTestApp(t, dbPath)
+	defer app.db.Close()
+
+	status, err := app.GetSyncStatus()
+	if err != nil {
+		t.Fatalf("GetSyncStatus() error = %v", err)
+	}
+	if status.InProgress {
+		t.Fatalf("GetSyncStatus().InProgress = true before any sync ran, want false")
+	}
+
+	app.syncing.Store(true)
+	status, err = app.GetSyncStatus()
+	if err != nil {
+		t.Fatalf("GetSyncStatus() error = %v", err)
+	}
+	if !status.InProgress {
+		t.Fatalf("GetSyncStatus().InProgress = false while syncing, want true")
+	}
+
+	app.syncing.Store(false)
+	status, err = app.GetSyncStatus()
+	if err != nil {
+		t.Fatalf("GetSyncStatus() error = %v", err)
+	}
+	if status.InProgress {
+		t.Fatalf("GetSyncStatus().InProgress = true after sync finished, want false")
+	}
+}
+
+// TestApp_TryBeginSyncEnforcesMutualExclusion covers tryBeginSync/endSync
+// in isolation: only one sync may hold the lock at a time, and it becomes
+// available again once released.
+func TestApp_TryBeginSyncEnforcesMutualExclusion(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gui-config.db")
+	app := openTestApp(t, dbPath)
+	defer app.db.Close()
+
+	if !app.tryBeginSync() {
+		t.Fatalf("tryBeginSync() = false on first call, want true")
+	}
+	if app.tryBeginSync() {
+		t.Fatalf("tryBeginSync() = true while a sync is already in progress, want false")
+	}
+	if !app.syncing.Load() {
+		t.Fatalf("syncing = false while a sync is in progress, want true")
+	}
+
+	app.endSync()
+	if app.syncing.Load() {
+		t.Fatalf("syncing = true after endSync(), want false")
+	}
+	if !app.tryBeginSync() {
+		t.Fatalf("tryBeginSync() = false after endSync(), want true")
+	}
+	app.endSync()
+}
+
+// TestApp_StartFullSyncRejectedWhileAnotherSyncRuns verifies StartFullSync
+// refuses to run - without attempting anything - while another sync
+// (manual or background) already holds the lock: UpdateCacheSync and
+// LiveCacheSync must never run concurrently.
+func TestApp_StartFullSyncRejectedWhileAnotherSyncRuns(t *testing.T) {
+	const user, pass = "user@example.com", "s3cret"
+	endpoint := newFakeCarbonioServer(t, user, pass)
+	dbPath := filepath.Join(t.TempDir(), "gui-config.db")
+
+	app := openTestApp(t, dbPath)
+	defer app.db.Close()
+	defer app.stopBackgroundSync()
+
+	if result := app.Login(endpoint, user, pass); !result.Success {
+		t.Fatalf("Login() = %+v, want Success=true", result)
+	}
+	syncDir := filepath.Join(t.TempDir(), "carbonio-sync")
+	if err := app.SetSyncFolder(syncDir); err != nil {
+		t.Fatalf("SetSyncFolder() error = %v", err)
+	}
+
+	// Simulate another sync operation already running.
+	if !app.tryBeginSync() {
+		t.Fatalf("tryBeginSync() = false, want true (setup)")
+	}
+	err := app.StartFullSync()
+	app.endSync()
+	if err == nil {
+		t.Fatalf("StartFullSync() while another sync is running = nil error, want an error")
+	}
+}
+
+// TestApp_BackgroundSyncCycleSkipsWhileAnotherSyncRuns verifies the
+// periodic background job's cycle bails out immediately - without
+// acquiring/releasing the sync lock - when another sync is already in
+// progress, instead of running UpdateCacheSync/LiveCacheSync concurrently
+// with it.
+func TestApp_BackgroundSyncCycleSkipsWhileAnotherSyncRuns(t *testing.T) {
+	const user, pass = "user@example.com", "s3cret"
+	endpoint := newFakeCarbonioServer(t, user, pass)
+	dbPath := filepath.Join(t.TempDir(), "gui-config.db")
+
+	app := openTestApp(t, dbPath)
+	defer app.db.Close()
+	defer app.stopBackgroundSync()
+
+	if result := app.Login(endpoint, user, pass); !result.Success {
+		t.Fatalf("Login() = %+v, want Success=true", result)
+	}
+	syncDir := filepath.Join(t.TempDir(), "carbonio-sync")
+	if err := app.SetSyncFolder(syncDir); err != nil {
+		t.Fatalf("SetSyncFolder() error = %v", err)
+	}
+
+	if !app.tryBeginSync() {
+		t.Fatalf("tryBeginSync() = false, want true (setup)")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		app.runBackgroundSyncCycle()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("runBackgroundSyncCycle() did not return promptly while another sync was in progress")
+	}
+
+	// runBackgroundSyncCycle must never have acquired the lock: it would
+	// only call endSync() after a successful tryBeginSync, i.e. only if it
+	// had wrongly proceeded despite the lock being held elsewhere.
+	if app.syncMu.TryLock() {
+		app.syncMu.Unlock()
+		t.Fatalf("runBackgroundSyncCycle() altered the sync lock while it was held elsewhere")
+	}
+
+	app.endSync()
+}
+
+// TestApp_SyncEnabledPersistsAcrossRestart verifies the dashboard's sync
+// on/off decision (SetSyncEnabled) survives an app restart and that the
+// background sync job resumes/stays off automatically to match - not just
+// that GetSyncEnabled() reports the right value, but that
+// maybeStartBackgroundSync (called from Init -> autoLogin) actually acts
+// on it.
+func TestApp_SyncEnabledPersistsAcrossRestart(t *testing.T) {
+	const user, pass = "user@example.com", "s3cret"
+	endpoint := newFakeCarbonioServer(t, user, pass)
+	dbPath := filepath.Join(t.TempDir(), "gui-config.db")
+	syncDir := filepath.Join(t.TempDir(), "carbonio-sync")
+
+	app1 := openTestApp(t, dbPath)
+	if result := app1.Login(endpoint, user, pass); !result.Success {
+		t.Fatalf("Login() = %+v, want Success=true", result)
+	}
+	if err := app1.SetSyncFolder(syncDir); err != nil {
+		t.Fatalf("SetSyncFolder() error = %v", err)
+	}
+	if err := app1.SetSyncEnabled(true); err != nil {
+		t.Fatalf("SetSyncEnabled(true) error = %v", err)
+	}
+	if app1.syncJobCancel == nil {
+		t.Fatalf("SetSyncEnabled(true) did not start the background job")
+	}
+	app1.stopBackgroundSync()
+	app1.db.Close()
+
+	// Simulate reopening the app: fresh App/db pointed at the same file.
+	app2 := openTestApp(t, dbPath)
+	defer app2.db.Close()
+	defer app2.stopBackgroundSync()
+
+	state := app2.Init()
+	if !state.AutoLogin.Success {
+		t.Fatalf("Init() AutoLogin = %+v, want Success=true", state.AutoLogin)
+	}
+	if !app2.GetSyncEnabled() {
+		t.Fatalf("GetSyncEnabled() after restart = false, want true (persisted decision)")
+	}
+	if app2.syncJobCancel == nil {
+		t.Fatalf("background sync job did not resume automatically after restart with SyncEnabled=true")
+	}
+	app2.stopBackgroundSync()
+
+	// Now disable it and verify the opposite: after another restart, it
+	// must stay off.
+	if err := app2.SetSyncEnabled(false); err != nil {
+		t.Fatalf("SetSyncEnabled(false) error = %v", err)
+	}
+	if app2.syncJobCancel != nil {
+		t.Fatalf("SetSyncEnabled(false) did not stop the background job")
+	}
+	app2.db.Close()
+
+	app3 := openTestApp(t, dbPath)
+	defer app3.db.Close()
+	defer app3.stopBackgroundSync()
+	state3 := app3.Init()
+	if !state3.AutoLogin.Success {
+		t.Fatalf("Init() AutoLogin = %+v, want Success=true", state3.AutoLogin)
+	}
+	if app3.GetSyncEnabled() {
+		t.Fatalf("GetSyncEnabled() after restart = true, want false (persisted decision)")
+	}
+	if app3.syncJobCancel != nil {
+		t.Fatalf("background sync job started after restart despite SyncEnabled=false")
 	}
 }

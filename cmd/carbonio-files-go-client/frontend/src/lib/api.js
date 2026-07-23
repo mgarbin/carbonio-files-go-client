@@ -15,6 +15,10 @@ export const logout = () => backend().Logout();
 export const chooseSyncFolder = () => backend().ChooseSyncFolder();
 export const setSyncFolder = (path) => backend().SetSyncFolder(path);
 export const getSyncFolder = () => backend().GetSyncFolder();
+export const updateCacheSync = () => backend().UpdateCacheSync();
+export const startFullSync = () => backend().StartFullSync();
+export const getSyncStatus = () => backend().GetSyncStatus();
+export const setSyncEnabled = (enabled) => backend().SetSyncEnabled(enabled);
 export const chooseLogFolder = (currentPath) => backend().ChooseLogFolder(currentPath);
 export const getLoggingConfig = () => backend().GetLoggingConfig();
 export const updateLoggingConfig = (level, format, output, path) =>

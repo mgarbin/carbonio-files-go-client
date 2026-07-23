@@ -19,9 +19,11 @@
 </script>
 
 <div class="flex w-60 flex-shrink-0 flex-col border-r border-border bg-surface p-3">
-  <div class="px-2.5 pb-5 pt-2 text-[15px] font-bold">{t("app.title")}</div>
-
-  <button type="button" class={itemClass($section === "dashboard")} on:click={() => go("dashboard")}>
+  <button
+    type="button"
+    class="mb-1 block w-full rounded px-2.5 py-2.5 text-left text-base font-bold text-brand-dark transition-colors {$section === 'dashboard' ? 'bg-brand/[0.2]' : 'bg-brand/[0.12] hover:bg-brand/[0.2]'}"
+    on:click={() => go("dashboard")}
+  >
     {t("menu.dashboard")}
   </button>
 

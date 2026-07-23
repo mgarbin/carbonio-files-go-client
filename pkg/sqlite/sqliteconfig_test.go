@@ -38,6 +38,7 @@ func TestConfigCRUD(t *testing.T) {
 		LogFormat:        "json",
 		LogOutput:        "both",
 		LogPath:          "/tmp/carbonio-test.log",
+		SyncEnabled:      true,
 	}
 	if err := h.CreateConfig(in); err != nil {
 		t.Fatalf("CreateConfig() error = %v", err)
@@ -56,7 +57,7 @@ func TestConfigCRUD(t *testing.T) {
 		t.Fatal("GetConfig() = nil, want a record")
 	}
 	if got.Endpoint != in.Endpoint || got.Username != in.Username || got.Password != in.Password || got.AuthToken != in.AuthToken || got.FilesLocalFolder != in.FilesLocalFolder ||
-		got.LogLevel != in.LogLevel || got.LogFormat != in.LogFormat || got.LogOutput != in.LogOutput || got.LogPath != in.LogPath {
+		got.LogLevel != in.LogLevel || got.LogFormat != in.LogFormat || got.LogOutput != in.LogOutput || got.LogPath != in.LogPath || got.SyncEnabled != in.SyncEnabled {
 		t.Fatalf("GetConfig() = %+v, want fields matching %+v", got, in)
 	}
 	if got.CreatedAt == "" || got.UpdatedAt == "" {
@@ -74,6 +75,7 @@ func TestConfigCRUD(t *testing.T) {
 		LogFormat:        "console",
 		LogOutput:        "file",
 		LogPath:          "/tmp/carbonio-other.log",
+		SyncEnabled:      false,
 	}
 	if err := h.UpdateConfig(updated); err != nil {
 		t.Fatalf("UpdateConfig() error = %v", err)
@@ -83,7 +85,7 @@ func TestConfigCRUD(t *testing.T) {
 		t.Fatalf("GetConfig() after update error = %v", err)
 	}
 	if got.Endpoint != updated.Endpoint || got.Password != updated.Password || got.AuthToken != "" ||
-		got.LogLevel != updated.LogLevel || got.LogFormat != updated.LogFormat || got.LogOutput != updated.LogOutput || got.LogPath != updated.LogPath {
+		got.LogLevel != updated.LogLevel || got.LogFormat != updated.LogFormat || got.LogOutput != updated.LogOutput || got.LogPath != updated.LogPath || got.SyncEnabled != updated.SyncEnabled {
 		t.Fatalf("GetConfig() after update = %+v, want fields matching %+v", got, updated)
 	}
 
@@ -268,5 +270,72 @@ func TestConfigTableMigrationAddsLoggingColumns(t *testing.T) {
 	// Re-running the migration on an already-migrated table must be a no-op.
 	if err := ensureConfigTable(h.DB); err != nil {
 		t.Fatalf("re-running ensureConfigTable() error = %v", err)
+	}
+}
+
+// TestConfigTableMigrationAddsSyncEnabledColumn mirrors
+// TestConfigTableMigrationAddsLoggingColumns for the sync_enabled column:
+// opening a database created before it existed must transparently add it
+// (defaulting to disabled) without touching the pre-existing row, and the
+// column must then be fully usable.
+func TestConfigTableMigrationAddsSyncEnabledColumn(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "legacy-sync-enabled.db")
+
+	h0, err := NewSqliteHelper(dbPath)
+	if err != nil {
+		t.Fatalf("NewSqliteHelper() error = %v", err)
+	}
+	legacyCfg := ConfigRecord{
+		Endpoint:         "legacy.example.com",
+		Username:         "legacyuser",
+		Password:         "legacy-password",
+		FilesLocalFolder: "./files",
+	}
+	if err := h0.CreateConfig(legacyCfg); err != nil {
+		t.Fatalf("CreateConfig() error = %v", err)
+	}
+	if _, err := h0.DB.Exec(`ALTER TABLE config DROP COLUMN sync_enabled`); err != nil {
+		t.Fatalf("dropping column sync_enabled to simulate legacy schema failed: %v", err)
+	}
+	if err := h0.Close(); err != nil {
+		t.Fatalf("h0.Close() error = %v", err)
+	}
+
+	// Opening it again through SqliteHelper must migrate the table in place.
+	h, err := NewSqliteHelper(dbPath)
+	if err != nil {
+		t.Fatalf("NewSqliteHelper() on legacy db error = %v", err)
+	}
+	defer h.Close()
+
+	var syncEnabled int
+	row := h.DB.QueryRow(`SELECT sync_enabled FROM config WHERE id = 1`)
+	if err := row.Scan(&syncEnabled); err != nil {
+		t.Fatalf("querying migrated sync_enabled column failed: %v", err)
+	}
+	if syncEnabled != 0 {
+		t.Fatalf("migrated sync_enabled column = %d, want 0 (disabled by default)", syncEnabled)
+	}
+
+	// The pre-existing row must have survived the migration untouched.
+	got, err := h.GetConfig()
+	if err != nil {
+		t.Fatalf("GetConfig() after migration error = %v", err)
+	}
+	if got == nil || got.Endpoint != legacyCfg.Endpoint || got.SyncEnabled {
+		t.Fatalf("GetConfig() after migration = %+v, want legacy row preserved with SyncEnabled=false", got)
+	}
+
+	// The newly-added column must be fully usable going forward.
+	got.SyncEnabled = true
+	if err := h.UpdateConfig(*got); err != nil {
+		t.Fatalf("UpdateConfig() after migration error = %v", err)
+	}
+	got2, err := h.GetConfig()
+	if err != nil {
+		t.Fatalf("GetConfig() after sync_enabled update error = %v", err)
+	}
+	if !got2.SyncEnabled {
+		t.Fatalf("GetConfig() after sync_enabled update = %+v, want SyncEnabled=true", got2)
 	}
 }

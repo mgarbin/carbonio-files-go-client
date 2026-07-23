@@ -10,7 +10,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
+	"carbonio-files-go-client/pkg/actions"
 	"carbonio-files-go-client/pkg/appdir"
 	"carbonio-files-go-client/pkg/carbonio"
 	"carbonio-files-go-client/pkg/i18n"
@@ -21,6 +25,10 @@ import (
 	"github.com/rs/zerolog/log"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+// backgroundSyncInterval is how often the background sync job (see
+// maybeStartBackgroundSync) re-checks the cache and reconciles changes.
+const backgroundSyncInterval = 5 * time.Minute
 
 // App is the Wails-bound backend for the desktop GUI. Every exported method
 // is callable from the frontend as window.go.main.App.<Method>.
@@ -34,6 +42,25 @@ type App struct {
 
 	// logCloser closes the log file opened by applyLoggingConfig, if any.
 	logCloser io.Closer
+
+	// syncMu enforces mutual exclusion between sync operations
+	// (UpdateCacheSync/LiveCacheSync, whether triggered by StartFullSync,
+	// the initial setup-wizard scan, or a background sync cycle): only one
+	// may ever run at a time. Acquire/release it only via
+	// tryBeginSync/endSync.
+	syncMu sync.Mutex
+	// syncing mirrors syncMu's held/free state as a lock-free read for the
+	// frontend (see SyncStatus.InProgress) - true exactly while syncMu is
+	// held by a sync operation.
+	syncing atomic.Bool
+
+	// syncJobMu guards syncJobCancel: maybeStartBackgroundSync and
+	// stopBackgroundSync can be called concurrently (e.g. a login request
+	// racing the setup wizard's completion).
+	syncJobMu sync.Mutex
+	// syncJobCancel stops the running background sync loop, or nil if it
+	// isn't running.
+	syncJobCancel context.CancelFunc
 }
 
 // Session describes the currently authenticated user, if any. Token is
@@ -113,10 +140,12 @@ func (a *App) startup(ctx context.Context) {
 	}
 }
 
-// shutdown is wired as options.App.OnShutdown: it flushes/closes the log
-// file opened by applyLoggingConfig, if any, and removes the tray icon
-// started by runSystemTray so it doesn't outlive the process.
+// shutdown is wired as options.App.OnShutdown: it stops the background sync
+// job, flushes/closes the log file opened by applyLoggingConfig, if any,
+// and removes the tray icon started by runSystemTray so it doesn't outlive
+// the process.
 func (a *App) shutdown(ctx context.Context) {
+	a.stopBackgroundSync()
 	if a.logCloser != nil {
 		a.logCloser.Close()
 	}
@@ -375,6 +404,303 @@ func (a *App) SetSyncFolder(path string) error {
 	return a.db.UpdateConfig(*cfg)
 }
 
+// UpdateCacheSync runs the initial sqlite sync cache scan (see
+// actions.UpdateCacheSync, the same routine behind the -updateCacheSync CLI
+// flag) against the currently persisted sync folder, using the active
+// session's endpoint and auth token. It requires a prior successful login
+// and a sync folder already saved via SetSyncFolder. The frontend calls
+// this once, automatically, right after the first-time setup wizard
+// (SyncSetupScreen) saves the sync folder, showing a loading screen for the
+// - potentially long - duration of the call since it walks the whole local
+// folder and the whole remote tree before returning.
+func (a *App) UpdateCacheSync() error {
+	if !a.session.LoggedIn {
+		return errors.New("log in first")
+	}
+	folder := a.GetSyncFolder()
+	if folder.Path == "" {
+		return errors.New("sync folder not configured")
+	}
+	if !a.tryBeginSync() {
+		return errors.New("a sync is already in progress")
+	}
+	err := actions.UpdateCacheSync(a.session.Endpoint, a.session.Token, folder.Path)
+	a.endSync()
+	if err != nil {
+		return err
+	}
+	// The sync folder is now configured for the first time: start the
+	// periodic background sync job (see maybeStartBackgroundSync).
+	a.maybeStartBackgroundSync()
+	return nil
+}
+
+// StartFullSync runs a full cache sync - UpdateCacheSync followed by
+// LiveCacheSync (see actions.FullCacheSync, the same routine behind the
+// -fullCacheSync CLI flag) - against the currently persisted sync folder,
+// using the active session's credentials. It backs the dashboard's "Avvia
+// Sincronizzazione" button; the frontend flips the sync status badge to
+// "active" once this call is dispatched, and SyncStatus.InProgress reports
+// "in progress" for its whole duration (see the syncing field). Fails
+// immediately, without running anything, if another sync (manual or the
+// periodic background job) is already in progress - see tryBeginSync.
+func (a *App) StartFullSync() error {
+	if !a.session.LoggedIn {
+		return errors.New("log in first")
+	}
+	folder := a.GetSyncFolder()
+	if folder.Path == "" {
+		return errors.New("sync folder not configured")
+	}
+	if !a.tryBeginSync() {
+		return errors.New("a sync is already in progress")
+	}
+	defer a.endSync()
+	return actions.FullCacheSync(a.session.Endpoint, a.session.Token, folder.Path, a.auth)
+}
+
+// tryBeginSync attempts to acquire exclusive access for a sync operation:
+// UpdateCacheSync and LiveCacheSync must never run concurrently with each
+// other, regardless of whether they were triggered manually
+// (StartFullSync, the initial setup-wizard scan) or by the periodic
+// background job. It never blocks: returns false immediately if another
+// sync is already running. Every call that returns true must be paired
+// with exactly one endSync call.
+func (a *App) tryBeginSync() bool {
+	if !a.syncMu.TryLock() {
+		return false
+	}
+	a.syncing.Store(true)
+	return true
+}
+
+// endSync releases the exclusive sync lock acquired by a successful
+// tryBeginSync call.
+func (a *App) endSync() {
+	a.syncing.Store(false)
+	a.syncMu.Unlock()
+}
+
+// maybeStartBackgroundSync starts the periodic background sync job (see
+// runBackgroundSyncLoop) unless it is already running, or the session/sync
+// folder it depends on aren't available yet. Safe to call repeatedly -
+// every login path and the first-time setup wizard all call it - since it
+// no-ops once the job is already running.
+func (a *App) maybeStartBackgroundSync() {
+	a.syncJobMu.Lock()
+	defer a.syncJobMu.Unlock()
+
+	if a.syncJobCancel != nil {
+		return
+	}
+	if !a.session.LoggedIn || a.GetSyncFolder().Path == "" || !a.GetSyncEnabled() {
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	a.syncJobCancel = cancel
+	go a.runBackgroundSyncLoop(ctx)
+}
+
+// SetSyncEnabled persists the dashboard's sync on/off decision (see
+// sqlitecache.ConfigRecord.SyncEnabled) - backing the "Avvia
+// Sincronizzazione" / "Ferma Sincronizzazione" button - and immediately
+// starts or stops the periodic background sync job to match, so the choice
+// takes effect right away and is resumed automatically on the next login
+// (see maybeStartBackgroundSync, called from autoLogin/login).
+func (a *App) SetSyncEnabled(enabled bool) error {
+	if a.db == nil {
+		return errors.New("credential store unavailable")
+	}
+	cfg, err := a.db.GetConfig()
+	if err != nil {
+		return err
+	}
+	if cfg == nil {
+		return errors.New("log in first: the sync preference is stored alongside your saved credentials")
+	}
+	cfg.SyncEnabled = enabled
+	if err := a.db.UpdateConfig(*cfg); err != nil {
+		return err
+	}
+	if enabled {
+		a.maybeStartBackgroundSync()
+	} else {
+		a.stopBackgroundSync()
+	}
+	return nil
+}
+
+// GetSyncEnabled returns the persisted sync on/off decision, or false if
+// none has been saved yet (e.g. before the first login).
+func (a *App) GetSyncEnabled() bool {
+	if a.db == nil {
+		return false
+	}
+	cfg, err := a.db.GetConfig()
+	if err != nil || cfg == nil {
+		return false
+	}
+	return cfg.SyncEnabled
+}
+
+// stopBackgroundSync stops the periodic background sync job, if running.
+// Called on Logout (the session it depends on no longer applies) and on
+// shutdown.
+func (a *App) stopBackgroundSync() {
+	a.syncJobMu.Lock()
+	defer a.syncJobMu.Unlock()
+
+	if a.syncJobCancel != nil {
+		a.syncJobCancel()
+		a.syncJobCancel = nil
+	}
+}
+
+// runBackgroundSyncLoop runs one sync cycle immediately (so enabling sync -
+// at startup via maybeStartBackgroundSync, or via SetSyncEnabled(true) -
+// starts the whole sync process right away instead of waiting up to
+// backgroundSyncInterval for the first tick), then ticks every
+// backgroundSyncInterval and runs one runBackgroundSyncCycle per tick,
+// until ctx is cancelled by stopBackgroundSync.
+func (a *App) runBackgroundSyncLoop(ctx context.Context) {
+	a.runBackgroundSyncCycle()
+
+	ticker := time.NewTicker(backgroundSyncInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.runBackgroundSyncCycle()
+		}
+	}
+}
+
+// runBackgroundSyncCycle refreshes the sqlite sync cache
+// (actions.UpdateCacheSync) and, only if that refresh found pending
+// changes (remote/local-only items, out-of-sync content, or a deletion
+// still to propagate - see sqlitecache.CountPendingChanges), reconciles
+// them with actions.LiveCacheSync. Every step is best-effort: errors are
+// logged (UpdateCacheSync's own failures also land in the sync_meta table,
+// surfaced on the dashboard's error zone) and never panic the goroutine.
+// Skips entirely, without touching anything, if another sync (a manual
+// StartFullSync or the previous cycle running long) is already in
+// progress - see tryBeginSync.
+func (a *App) runBackgroundSyncCycle() {
+	if !a.session.LoggedIn {
+		return
+	}
+	folder := a.GetSyncFolder()
+	if folder.Path == "" {
+		return
+	}
+	if !a.tryBeginSync() {
+		log.Debug().Msg("Background sync: skipped, another sync is already in progress")
+		return
+	}
+	defer a.endSync()
+
+	endpoint, token := a.session.Endpoint, a.session.Token
+
+	if err := actions.UpdateCacheSync(endpoint, token, folder.Path); err != nil {
+		log.Error().Err(err).Msg("Background sync: updateCacheSync failed")
+		return
+	}
+
+	pending, err := a.pendingSyncChanges()
+	if err != nil {
+		log.Error().Err(err).Msg("Background sync: checking pending changes failed")
+		return
+	}
+	if pending == 0 {
+		log.Debug().Msg("Background sync: no changes detected")
+		return
+	}
+
+	log.Info().Int("pending", pending).Msg("Background sync: changes detected, running liveCacheSync")
+	if err := actions.LiveCacheSync(endpoint, token, folder.Path, a.auth); err != nil {
+		log.Error().Err(err).Msg("Background sync: liveCacheSync failed")
+	}
+}
+
+// pendingSyncChanges returns how many filesync cache records still need
+// reconciling (see sqlitecache.CountPendingChanges).
+func (a *App) pendingSyncChanges() (int, error) {
+	cacheDb, err := sqlitecache.NewSqliteHelper(appdir.Path("file_sync_cache.db"))
+	if err != nil {
+		return 0, err
+	}
+	defer cacheDb.Close()
+	return cacheDb.CountPendingChanges()
+}
+
+// SyncStatus summarizes the local sqlite sync cache (see
+// actions.UpdateCacheSync / pkg/sqlite's sync_meta and filesync tables) for
+// the dashboard's "Stato Sincronizzazione" panel.
+type SyncStatus struct {
+	// LastSyncedAt is the RFC3339 timestamp of the last completed
+	// UpdateCacheSync run, or "" if it has never run yet.
+	LastSyncedAt string `json:"lastSyncedAt"`
+	// MissingLocally counts items that exist on the remote server but not
+	// yet on this device (sync_status = "remote_only").
+	MissingLocally int `json:"missingLocally"`
+	// RemoteItems counts every item currently known to exist on the
+	// remote server.
+	RemoteItems int `json:"remoteItems"`
+	// LastError is the error message from the last UpdateCacheSync run,
+	// or "" if it succeeded (or never ran).
+	LastError string `json:"lastError"`
+	// InProgress is true while a sync operation (StartFullSync, the
+	// initial cache scan, or a background sync cycle) is actively
+	// running.
+	InProgress bool `json:"inProgress"`
+	// Enabled is the persisted on/off decision (see
+	// sqlitecache.ConfigRecord.SyncEnabled / SetSyncEnabled): true means
+	// the periodic background sync job is meant to be running.
+	Enabled bool `json:"enabled"`
+}
+
+// GetSyncStatus reads the sqlite sync cache (populated by UpdateCacheSync)
+// and returns a summary for the dashboard. Returns a zero SyncStatus, no
+// error, if the cache hasn't been created yet (e.g. before the first sync
+// scan has ever run).
+func (a *App) GetSyncStatus() (SyncStatus, error) {
+	dbPath := appdir.Path("file_sync_cache.db")
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		return SyncStatus{InProgress: a.syncing.Load(), Enabled: a.GetSyncEnabled()}, nil
+	}
+
+	cacheDb, err := sqlitecache.NewSqliteHelper(dbPath)
+	if err != nil {
+		return SyncStatus{}, err
+	}
+	defer cacheDb.Close()
+
+	status := SyncStatus{InProgress: a.syncing.Load(), Enabled: a.GetSyncEnabled()}
+	if meta, err := cacheDb.GetSyncMeta(); err != nil {
+		return SyncStatus{}, err
+	} else if meta != nil {
+		status.LastSyncedAt = meta.LastRunAt
+		status.LastError = meta.LastError
+	}
+
+	missing, err := cacheDb.CountBySyncStatus("remote_only")
+	if err != nil {
+		return SyncStatus{}, err
+	}
+	status.MissingLocally = missing
+
+	remote, err := cacheDb.CountRemotePresent()
+	if err != nil {
+		return SyncStatus{}, err
+	}
+	status.RemoteItems = remote
+
+	return status, nil
+}
+
 // configDBPath returns the per-user path of the GUI's encrypted credential
 // store, independent of the process' current working directory: it lives
 // alongside the CLI's cache database and the log file under
@@ -424,6 +750,7 @@ func (a *App) autoLogin(cfg *sqlitecache.ConfigRecord) LoginResult {
 	}
 
 	a.session = Session{LoggedIn: true, Endpoint: cfg.Endpoint, Username: cfg.Username, Token: token}
+	a.maybeStartBackgroundSync()
 	return LoginResult{Success: true, Endpoint: cfg.Endpoint, Username: cfg.Username, NeedsSyncSetup: cfg.FilesLocalFolder == ""}
 }
 
@@ -504,6 +831,7 @@ func (a *App) login(endpoint, username, password string) LoginResult {
 			result.NeedsSyncSetup = cfg.FilesLocalFolder == ""
 		}
 	}
+	a.maybeStartBackgroundSync()
 	return result
 }
 
@@ -516,6 +844,7 @@ func (a *App) GetSession() Session {
 // Logout clears the in-memory session and removes the saved credentials so
 // the next launch shows the login screen again.
 func (a *App) Logout() error {
+	a.stopBackgroundSync()
 	a.session = Session{}
 	if a.db == nil {
 		return nil

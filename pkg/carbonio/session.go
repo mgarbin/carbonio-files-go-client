@@ -96,15 +96,17 @@ func (s *Session) reauthenticate() (string, error) {
 			Password:  s.Password,
 			AuthToken: s.token,
 		}
-		// Preserve any previously saved logging settings and sync folder:
-		// UpsertConfig replaces the whole singleton row, and refreshing the
-		// token should never silently reset them to defaults.
+		// Preserve any previously saved logging settings, sync folder, and
+		// sync on/off decision: UpsertConfig replaces the whole singleton
+		// row, and refreshing the token should never silently reset them
+		// to defaults.
 		if existing, err := s.Store.GetConfig(); err == nil && existing != nil {
 			record.LogLevel = existing.LogLevel
 			record.LogFormat = existing.LogFormat
 			record.LogOutput = existing.LogOutput
 			record.LogPath = existing.LogPath
 			record.FilesLocalFolder = existing.FilesLocalFolder
+			record.SyncEnabled = existing.SyncEnabled
 		}
 		if err := s.Store.UpsertConfig(record); err != nil {
 			log.Error().Err(err).Msg("[auth] cannot persist refreshed auth token")
