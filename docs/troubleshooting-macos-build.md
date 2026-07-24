@@ -97,3 +97,39 @@ Try these in order.
 Also check `~/.zshrc` / `~/.bash_profile` for a stale `CPLUS_INCLUDE_PATH` or
 `SDKROOT` — a known cause of this exact "framework header not found" symptom —
 and clear it.
+
+## Troubleshooting: macOS build prints a `setShowsBaselineSeparator:` deprecation warning
+
+### Symptom
+
+Building on macOS with **SDK 26+** prints:
+
+```
+# github.com/wailsapp/wails/v2/internal/frontend/desktop/darwin
+WailsContext.m:182:18: warning: 'setShowsBaselineSeparator:' is deprecated: first deprecated in macOS 15.0 - No longer supported [-Wdeprecated-declarations]
+```
+
+### Cause
+
+This is a **warning, not an error** — `go build` still completes and emits the
+`carbonio-files-client` binary. The call lives in Wails' own vendored
+Objective-C (`WailsContext.m`, `wails/v2@v2.13.0`), not in this repository.
+`NSToolbar setShowsBaselineSeparator:` was soft-deprecated in macOS 15 but
+remains functional; the macOS 26 SDK simply started flagging it via
+`-Wdeprecated-declarations`. cgo does not use `-Werror`, so the warning never
+aborts the build.
+
+### Fix
+
+The `Makefile` already appends `-Wno-deprecated-declarations` to `CGO_CFLAGS`
+for the `build` target, so `make build` is quiet. If you invoke `go build`
+directly, silence it the same way:
+
+```bash
+CGO_CFLAGS="$CGO_CFLAGS -Wno-deprecated-declarations" \
+  go build -tags "webkit2_41,production" -ldflags="-s -w" \
+  -o carbonio-files-client ./cmd/carbonio-files-go-client
+```
+
+The fix belongs upstream in Wails; nothing in this repository can be changed to
+remove the deprecated call itself.
