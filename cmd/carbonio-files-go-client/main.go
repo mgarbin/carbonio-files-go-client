@@ -24,7 +24,7 @@ import (
 	"carbonio-files-go-client/pkg/logger"
 	sqlitecache "carbonio-files-go-client/pkg/sqlite"
 
-	"github.com/energye/systray"
+	"github.com/mgarbin/systray"
 	"github.com/rs/zerolog/log"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
