@@ -10,6 +10,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"flag"
 	"fmt"
@@ -85,12 +86,20 @@ func runGUI() {
 
 	app := NewApp()
 
-	// Run the system tray in the background so closing the main window
-	// (the X button) minimizes to the notification area instead of
-	// exiting; the app only really quits from the tray's "Quit" item or
-	// OS session teardown. Wails' native event loop needs the goroutine
-	// it's started on for itself, so the tray gets its own.
-	go runSystemTray(app)
+	// Register the tray's status item/menu now, on this goroutine (the
+	// real OS main thread — systray's package init() already called
+	// runtime.LockOSThread() before main() ran). We deliberately do NOT
+	// use systray.Run(): that spawns systray's own platform event loop,
+	// and on macOS AppKit allows only one NSApplication run loop, which
+	// must live on the main thread. Wails drives that single run loop
+	// (started inside wails.Run below); RunWithExternalLoop only wires up
+	// the tray's status item/menu and hands back start/stop hooks instead
+	// of running a competing loop, so Wails' loop ends up servicing tray
+	// events too. Closing the main window (the X button) minimizes to the
+	// notification area instead of exiting; the app only really quits
+	// from the tray's "Quit" item or OS session teardown.
+	startTray, stopTray := systray.RunWithExternalLoop(func() { onTrayReady(app) }, func() {})
+	startTray()
 
 	err = wails.Run(&options.App{
 		Title:             "Carbonio Files Client",
@@ -103,8 +112,11 @@ func runGUI() {
 		AssetServer: &assetserver.Options{
 			Assets: frontendFS,
 		},
-		OnStartup:  app.startup,
-		OnShutdown: app.shutdown,
+		OnStartup: app.startup,
+		OnShutdown: func(ctx context.Context) {
+			stopTray()
+			app.shutdown(ctx)
+		},
 		Bind: []interface{}{
 			app,
 		},
@@ -113,15 +125,6 @@ func runGUI() {
 		log.Error().Err(err).Msg("Error starting GUI")
 		os.Exit(1)
 	}
-}
-
-// runSystemTray starts the notification-area icon and blocks until
-// systray.Quit() is called (from the tray's "Quit" item or app.shutdown).
-// It must run on its own goroutine: both Wails' native event loop and
-// systray's want to drive a platform event loop, and each expects the
-// goroutine it was started on for that.
-func runSystemTray(app *App) {
-	systray.Run(func() { onTrayReady(app) }, func() {})
 }
 
 // onTrayReady configures the tray icon/tooltip and menu once the tray

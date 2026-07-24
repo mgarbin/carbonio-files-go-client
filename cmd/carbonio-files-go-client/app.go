@@ -21,7 +21,6 @@ import (
 	"carbonio-files-go-client/pkg/logger"
 	sqlitecache "carbonio-files-go-client/pkg/sqlite"
 
-	"github.com/mgarbin/systray"
 	"github.com/rs/zerolog/log"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -157,15 +156,14 @@ func (a *App) startup(ctx context.Context) {
 }
 
 // shutdown is wired as options.App.OnShutdown: it stops the background sync
-// job, flushes/closes the log file opened by applyLoggingConfig, if any,
-// and removes the tray icon started by runSystemTray so it doesn't outlive
-// the process.
+// job and flushes/closes the log file opened by applyLoggingConfig, if any.
+// Tray teardown (stopTray, from runGUI) is called separately, before this,
+// so it doesn't outlive the process.
 func (a *App) shutdown(ctx context.Context) {
 	a.stopBackgroundSync()
 	if a.logCloser != nil {
 		a.logCloser.Close()
 	}
-	systray.Quit()
 }
 
 // applyLoggingConfig re-initializes the global zerolog logger with the given
