@@ -16,4 +16,5 @@ Carbonio Files Client is a desktop app and command-line client for managing and 
 - [Dependencies](docs/dependencies.md)
 - [Configuration storage (SQLite)](docs/configuration-storage-sqlite.md)
 - [Testing](docs/testing.md)
+- [Troubleshooting: macOS build](docs/troubleshooting-macos-build.md)
 - [Notes](docs/notes.md)
