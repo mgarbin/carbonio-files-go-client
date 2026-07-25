@@ -56,6 +56,13 @@ export function freshDocsOnline() {
 }
 export const docsOnline = writable(freshDocsOnline());
 
+// docsViewer holds the embedded webview state while a Docs Online
+// document is open: { nodeId, name, url } (url points at the local
+// DocsProxy - see App.OpenNodeWithDocs), or null when no viewer is open.
+// DashboardShell renders DocsOnlineViewer as a full takeover whenever
+// this is non-null.
+export const docsViewer = writable(null);
+
 // resetSessionState restores every per-session store to its pristine state.
 // Called on logout so the next login starts clean.
 export function resetSessionState() {
@@ -65,6 +72,6 @@ export function resetSessionState() {
   loginError.set(null);
   syncFolder.set(freshSyncFolder());
   syncInterval.set(freshSyncInterval());
-  logging.set(freshLogging());
   docsOnline.set(freshDocsOnline());
+  docsViewer.set(null);
 }

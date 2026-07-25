@@ -1,29 +1,34 @@
 <script>
-  import { section } from "../lib/stores";
+  import { section, docsViewer } from "../lib/stores";
   import Sidebar from "./Sidebar.svelte";
   import DashboardHome from "./DashboardHome.svelte";
   import DocsOnlineBoard from "./DocsOnlineBoard.svelte";
+  import DocsOnlineViewer from "./DocsOnlineViewer.svelte";
   import AuthenticationPanel from "./AuthenticationPanel.svelte";
   import SyncFolderPanel from "./SyncFolderPanel.svelte";
   import SyncIntervalPanel from "./SyncIntervalPanel.svelte";
   import LoggingPanel from "./LoggingPanel.svelte";
 </script>
 
-<div class="flex h-full">
-  <Sidebar />
-  <div class="flex-1 overflow-auto p-8 sm:p-10">
-    {#if $section === "authentication"}
-      <AuthenticationPanel />
-    {:else if $section === "docsOnline"}
-      <DocsOnlineBoard />
-    {:else if $section === "syncFolder"}
-      <SyncFolderPanel />
-    {:else if $section === "syncInterval"}
-      <SyncIntervalPanel />
-    {:else if $section === "logging"}
-      <LoggingPanel />
-    {:else}
-      <DashboardHome />
-    {/if}
+{#if $docsViewer}
+  <DocsOnlineViewer />
+{:else}
+  <div class="flex h-full">
+    <Sidebar />
+    <div class="flex-1 overflow-auto p-8 sm:p-10">
+      {#if $section === "authentication"}
+        <AuthenticationPanel />
+      {:else if $section === "docsOnline"}
+        <DocsOnlineBoard />
+      {:else if $section === "syncFolder"}
+        <SyncFolderPanel />
+      {:else if $section === "syncInterval"}
+        <SyncIntervalPanel />
+      {:else if $section === "logging"}
+        <LoggingPanel />
+      {:else}
+        <DashboardHome />
+      {/if}
+    </div>
   </div>
-</div>
+{/if}

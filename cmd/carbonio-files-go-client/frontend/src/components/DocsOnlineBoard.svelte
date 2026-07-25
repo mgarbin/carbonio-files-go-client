@@ -1,7 +1,7 @@
 <script>
   import { onMount } from "svelte";
   import { get } from "svelte/store";
-  import { docsOnline } from "../lib/stores";
+  import { docsOnline, docsViewer } from "../lib/stores";
   import { t, errorMessage } from "../lib/i18n";
   import * as api from "../lib/api";
   import Banner from "./ui/Banner.svelte";
@@ -84,6 +84,9 @@
     openError = null;
     api
       .openNodeWithDocs(node.id)
+      .then((url) => {
+        docsViewer.set({ nodeId: node.id, name: node.name, url });
+      })
       .catch((err) => {
         openError = "generic";
         console.error(err);

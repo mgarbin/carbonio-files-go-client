@@ -58,6 +58,12 @@ type App struct {
 	db   *sqlitecache.SqliteHelper
 	auth *carbonio.HTTPAuthenticator
 
+	// docsProxy is the local reverse proxy OpenNodeWithDocs points the
+	// embedded webview at - see carbonio.DocsProxy's doc comment for why
+	// a proxy, rather than a real cookie in the webview's own jar,
+	// authenticates it (Wails v2 has no cookie-manager API).
+	docsProxy *carbonio.DocsProxy
+
 	// sessionMu guards session: the background sync goroutine reads it
 	// concurrently with login/logout requests mutating it. Access only via
 	// currentSession/setSession.
@@ -151,7 +157,7 @@ type InitialState struct {
 // NewApp constructs the App backend. Call startup once the Wails runtime is
 // ready before binding it.
 func NewApp() *App {
-	return &App{auth: &carbonio.HTTPAuthenticator{}}
+	return &App{auth: &carbonio.HTTPAuthenticator{}, docsProxy: carbonio.NewDocsProxy()}
 }
 
 // guiDefaultOutput is the Output the desktop GUI falls back to when
@@ -205,6 +211,7 @@ func (a *App) startup(ctx context.Context) {
 // so it doesn't outlive the process.
 func (a *App) shutdown(ctx context.Context) {
 	a.stopBackgroundSync()
+	a.docsProxy.Stop()
 	if a.logCloser != nil {
 		a.logCloser.Close()
 	}
@@ -1234,25 +1241,39 @@ func sortDocsOnlineChildren(n *DocsOnlineNode) {
 	}
 }
 
-// OpenNodeWithDocs asks the server for the Carbonio Docs Online editor URL
-// for nodeId (see carbonio.HTTPAuthenticator.OpenFileWithDocs, mirroring
-// carbonio-files-ui's useOpenWithDocs hook) and opens it in the system's
-// default browser. Backs the "Open" action on files listed by
-// GetDocsOnlineTree; requires a prior successful login.
-func (a *App) OpenNodeWithDocs(nodeId string) error {
+// OpenNodeWithDocs returns the URL the frontend should point its embedded
+// <iframe> at to open nodeId in Carbonio Docs Online. Wails v2 has no
+// cookie-manager API (see carbonio.DocsProxy's doc comment), so the
+// webview can't be handed a real https://<endpoint>/... link with a
+// ZM_AUTH_TOKEN cookie of its own; instead this starts (if not already
+// running) a local reverse proxy authenticated with the current
+// session's token and asks it to resolve nodeId's real editor URL (see
+// carbonio.DocsProxy.ResolveOpenURL - GET /services/docs/files/open/
+// <nodeId> answers with JSON, not a redirect, so the iframe can't be
+// pointed at it directly), rewritten to the proxy's own local base URL.
+// The proxy then transparently forwards everything the editor itself
+// loads from there (assets, API calls, the collaborative WebSocket
+// connection) - cookie included. Backs the "Open" action on files listed
+// by GetDocsOnlineTree; requires a prior successful login.
+func (a *App) OpenNodeWithDocs(nodeId string) (string, error) {
 	session := a.currentSession()
 	if !session.LoggedIn {
-		return errors.New("log in first")
+		return "", errors.New("log in first")
 	}
-	fileOpenUrl, err := a.auth.OpenFileWithDocs(session.Token, nodeId)
+	a.docsProxy.SetCredentials(session.Endpoint, session.Token)
+	baseURL, err := a.docsProxy.Start()
 	if err != nil {
-		return err
+		log.Error().Err(err).Str("nodeId", nodeId).Str("endpoint", session.Endpoint).
+			Msg("[gui] failed to start docs proxy")
+		return "", err
 	}
-	if !strings.HasPrefix(fileOpenUrl, "http://") && !strings.HasPrefix(fileOpenUrl, "https://") {
-		fileOpenUrl = "https://" + session.Endpoint + fileOpenUrl
+	localURL, err := a.docsProxy.ResolveOpenURL(nodeId)
+	if err != nil {
+		log.Error().Err(err).Str("nodeId", nodeId).Str("endpoint", session.Endpoint).Str("proxyBase", baseURL).
+			Msg("[gui] failed to resolve Docs Online open URL")
+		return "", err
 	}
-	wailsruntime.BrowserOpenURL(a.ctx, fileOpenUrl)
-	return nil
+	return localURL, nil
 }
 
 // configDBPath returns the per-user path of the GUI's encrypted credential

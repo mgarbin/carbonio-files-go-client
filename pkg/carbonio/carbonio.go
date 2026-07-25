@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/http"
 	"net/mail"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -481,52 +480,6 @@ func (a *HTTPAuthenticator) DownloadFile(token, nodeId, destPath, fileName strin
 
 	log.Error().Err(lastErr).Str("fileName", fileName).Msg("Download failed after all retries")
 	return nil, lastErr
-}
-
-// OpenWithDocsResponse mirrors the JSON body returned by
-// GET /services/docs/files/open/<id> - see Carbonio's docs service and
-// carbonio-files-ui's useOpenWithDocs hook
-// (src/carbonio-files-ui-common/hooks/useOpenWithDocs.tsx), which this
-// call mirrors.
-type OpenWithDocsResponse struct {
-	FileOpenUrl string `json:"fileOpenUrl"`
-}
-
-// OpenFileWithDocs asks the Carbonio Docs service for the editor URL to
-// open node nodeId in Carbonio Docs Online. It mirrors
-// carbonio-files-ui's useOpenWithDocs hook exactly: same endpoint
-// (GET /services/docs/files/open/<id>), same offset_from_utc query
-// parameter (the client's UTC offset in minutes), same ZM_AUTH_TOKEN
-// cookie authentication. The returned URL may be relative to
-// https://<a.Endpoint>; the caller is responsible for resolving it before
-// opening it in a browser.
-func (a *HTTPAuthenticator) OpenFileWithDocs(token, nodeId string) (string, error) {
-	dialer := &net.Dialer{
-		Timeout: 5 * time.Second,
-	}
-	httpClient := newAuthenticatedClient(dialer, token)
-
-	_, offsetSeconds := time.Now().Zone()
-	query := url.Values{"offset_from_utc": {strconv.Itoa(offsetSeconds / 60)}}
-
-	resp, err := httpClient.Get("https://" + a.Endpoint + "/services/docs/files/open/" + url.PathEscape(nodeId) + "?" + query.Encode())
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("open with docs failed: %s", resp.Status)
-	}
-
-	var parsed OpenWithDocsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return "", err
-	}
-	if parsed.FileOpenUrl == "" {
-		return "", errors.New("open with docs: empty fileOpenUrl in response")
-	}
-	return parsed.FileOpenUrl, nil
 }
 
 // decompressBody returns a ReadCloser that transparently decompresses the
