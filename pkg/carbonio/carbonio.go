@@ -104,16 +104,13 @@ type HTTPAuthenticator struct {
 	Endpoint string
 }
 
-// customTransport adds the Cookie header to every request
+// customTransport adds the Cookie header (plus a few browser-like headers)
+// to every request. TLS/dialer settings live on base (see
+// newAuthenticatedClient), never on this struct - a field here would be
+// silently ignored, since RoundTrip only ever delegates to base.
 type customTransport struct {
-	base                  http.RoundTripper
-	DialContext           *net.Dialer
-	TLSClientConfig       *tls.Config
-	DisableKeepAlives     bool
-	MaxIdleConns          int
-	IdleConnTimeout       int
-	ExpectContinueTimeout time.Duration
-	authToken             string
+	base      http.RoundTripper
+	authToken string
 }
 
 // ProgressWriter wraps an io.Writer and displays progress.
@@ -172,6 +169,24 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("TE", "trailers")
 	return t.base.RoundTrip(req)
+}
+
+// newAuthenticatedClient builds an http.Client that authenticates every
+// request via the ZM_AUTH_TOKEN cookie (plus a few browser-like headers)
+// and talks to the Carbonio server over TLS without verifying its
+// certificate (Carbonio servers commonly use a self-signed certificate;
+// see docs/notes.md).
+func newAuthenticatedClient(dialer *net.Dialer, authToken string) *http.Client {
+	return &http.Client{
+		Transport: &customTransport{
+			base: &http.Transport{
+				DialContext:           dialer.DialContext,
+				TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
+				ExpectContinueTimeout: 1 * time.Second,
+			},
+			authToken: authToken,
+		},
+	}
 }
 
 func isValidEmail(email string) bool {
@@ -372,21 +387,8 @@ func (a *HTTPAuthenticator) DownloadFile(token, nodeId, destPath, fileName strin
 		Timeout: 5 * time.Second, // Only dial (connection) timeout
 	}
 
-	skipInsecure := &tls.Config{InsecureSkipVerify: true}
-
 	// Optionally, set up an authenticated HTTP client
-	httpClient := &http.Client{
-		Transport: &customTransport{
-			DialContext:           dialer,
-			TLSClientConfig:       skipInsecure,
-			DisableKeepAlives:     false,
-			MaxIdleConns:          0,
-			IdleConnTimeout:       0,
-			ExpectContinueTimeout: 1 * time.Second,
-			base:                  http.DefaultTransport,
-			authToken:             token,
-		},
-	}
+	httpClient := newAuthenticatedClient(dialer, token)
 
 	defer func() {
 		<-sem // release semaphore
@@ -568,21 +570,8 @@ func (a *HTTPAuthenticator) UploadFile(
 		Timeout: 5 * time.Second, // Only dial (connection) timeout
 	}
 
-	skipInsecure := &tls.Config{InsecureSkipVerify: true}
-
 	// Optionally, set up an authenticated HTTP client
-	httpClient := &http.Client{
-		Transport: &customTransport{
-			DialContext:           dialer,
-			TLSClientConfig:       skipInsecure,
-			DisableKeepAlives:     false,
-			MaxIdleConns:          0,
-			IdleConnTimeout:       0,
-			ExpectContinueTimeout: 1 * time.Second,
-			base:                  http.DefaultTransport,
-			authToken:             token,
-		},
-	}
+	httpClient := newAuthenticatedClient(dialer, token)
 
 	// Perform request
 	resp, err := httpClient.Do(req)
