@@ -179,10 +179,10 @@
 
 <h3 class="mb-2.5 mt-8 text-xs font-bold uppercase tracking-wide text-muted">{t("dashboard.actionsTitle")}</h3>
 <div class="flex flex-wrap gap-2.5">
-  <Button variant="primary" full={false} disabled={syncActionBusy} on:click={toggleSync}>
+  <Button variant="primary" full={false} disabled={syncActionBusy || syncStatus?.inProgress} on:click={toggleSync}>
     {syncStatus?.enabled ? t("dashboard.stopSync") : t("dashboard.startSync")}
   </Button>
-  <Button variant="secondary" full={false} on:click={openResetSyncDialog}>{t("dashboard.resetSync")}</Button>
+  <Button variant="secondary" full={false} on:click={openResetSyncDialog} disabled={syncActionBusy || syncStatus?.inProgress}>{t("dashboard.resetSync")}</Button>
 </div>
 
 {#if syncActionError}
