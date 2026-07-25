@@ -1,5 +1,11 @@
 {
   "app.title": "Carbonio Files Client",
+  "tray.showWindow": "Mostra finestra",
+  "tray.showWindowTooltip": "Mostra la finestra di Carbonio Files Client",
+  "tray.openSyncFolder": "Apri cartella di sincronizzazione",
+  "tray.openSyncFolderTooltip": "Apri la cartella di sincronizzazione locale",
+  "tray.quit": "Esci",
+  "tray.quitTooltip": "Esci da Carbonio Files Client",
   "login.heading": "Accedi a Carbonio",
   "login.endpointLabel": "Server",
   "login.endpointPlaceholder": "mail.esempio.it",

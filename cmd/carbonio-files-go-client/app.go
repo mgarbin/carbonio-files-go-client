@@ -21,6 +21,7 @@ import (
 	"carbonio-files-go-client/pkg/logger"
 	sqlitecache "carbonio-files-go-client/pkg/sqlite"
 
+	"github.com/mgarbin/systray"
 	"github.com/rs/zerolog/log"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -88,6 +89,19 @@ type App struct {
 	// currently running (ctx.Err() == nil) versus superseded by a restart
 	// (ctx.Err() != nil) - see restartBackgroundSyncJobIfRunning.
 	syncJobCtx context.Context
+
+	// trayMu guards trayOpenSyncFolder: onTrayReady (main goroutine,
+	// before wails.Run starts) registers the item once, while
+	// SetSyncFolder (invoked later from the Wails/frontend goroutine, by
+	// the setup wizard or the Preferences "Change folder…" button) reads
+	// it to re-enable the tray's "Open sync folder" item once a folder
+	// actually exists. A mutex is required, not just program order,
+	// because the two accesses cross goroutines.
+	trayMu sync.Mutex
+	// trayOpenSyncFolder is the tray's "Open sync folder" menu item. Nil
+	// until onTrayReady registers it (e.g. still nil in unit tests, which
+	// never build a tray) - every access is nil-checked.
+	trayOpenSyncFolder *systray.MenuItem
 }
 
 // Session describes the currently authenticated user, if any. Token is
@@ -154,6 +168,11 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 	a.db = db
+	// A returning user may already have a sync folder persisted from a
+	// previous run, but onTrayReady built (and disabled) the tray's "Open
+	// sync folder" item before a.db existed - see refreshTrayOpenSyncFolderItem's
+	// doc comment. Re-check now that the config store is actually open.
+	a.refreshTrayOpenSyncFolderItem()
 
 	var level, format, output, path string
 	if cfg, err := db.GetConfig(); err == nil && cfg != nil {
@@ -296,6 +315,19 @@ func openWithDefaultApp(path string) error {
 	return cmd.Start()
 }
 
+// OpenSyncFolder opens the configured local sync folder with the host OS'
+// default file manager (see openWithDefaultApp) - used by both the tray
+// menu's "Open sync folder" item and, if the frontend ever wants it, the
+// dashboard. Returns an error if no sync folder has been configured yet
+// (e.g. before the first login or before the setup wizard has run).
+func (a *App) OpenSyncFolder() error {
+	folder := a.GetSyncFolder()
+	if folder.Path == "" {
+		return errors.New("sync folder not configured")
+	}
+	return openWithDefaultApp(folder.Path)
+}
+
 // ChooseLogFolder opens the native OS directory picker (the same
 // per-OS chooser used by ChooseSyncFolder) so the user can pick where the
 // log file should live, and returns the resulting full log file path: the
@@ -427,7 +459,48 @@ func (a *App) SetSyncFolder(path string) error {
 		return errors.New("log in first: the sync folder is stored alongside your saved credentials")
 	}
 	cfg.FilesLocalFolder = path
-	return a.db.UpdateConfig(*cfg)
+	if err := a.db.UpdateConfig(*cfg); err != nil {
+		return err
+	}
+	a.refreshTrayOpenSyncFolderItem()
+	return nil
+}
+
+// setTrayOpenSyncFolderItem records the tray's "Open sync folder" menu
+// item so a later SetSyncFolder call (setup wizard or Preferences' "Change
+// folder…") can enable it once a folder actually exists. Called once by
+// onTrayReady after building the tray menu.
+func (a *App) setTrayOpenSyncFolderItem(item *systray.MenuItem) {
+	a.trayMu.Lock()
+	a.trayOpenSyncFolder = item
+	a.trayMu.Unlock()
+}
+
+// refreshTrayOpenSyncFolderItem enables/disables the tray's "Open sync
+// folder" item to match whether a sync folder is currently configured.
+// a.db is nil when onTrayReady runs (the tray is built synchronously
+// before wails.Run, i.e. before OnStartup/App.startup ever executes), so
+// its own initial call here always sees "not configured" and only
+// establishes the correct default (disabled) look while the app finishes
+// starting up. The real state is established once a.db actually exists
+// - startup calls this right after opening it, which is what enables the
+// item immediately for a returning user whose folder was already
+// configured in a previous run - and again every time SetSyncFolder
+// succeeds (a first-time user completing the setup wizard, or anyone
+// changing the folder from Preferences). No-op if the tray hasn't
+// registered the item yet (e.g. CLI mode, unit tests).
+func (a *App) refreshTrayOpenSyncFolderItem() {
+	a.trayMu.Lock()
+	item := a.trayOpenSyncFolder
+	a.trayMu.Unlock()
+	if item == nil {
+		return
+	}
+	if a.GetSyncFolder().Path == "" {
+		item.Disable()
+	} else {
+		item.Enable()
+	}
 }
 
 // UpdateCacheSync runs the initial sqlite sync cache scan (see

@@ -22,6 +22,7 @@ import (
 	"carbonio-files-go-client/pkg/appdir"
 	"carbonio-files-go-client/pkg/carbonio"
 	"carbonio-files-go-client/pkg/config"
+	"carbonio-files-go-client/pkg/i18n"
 	"carbonio-files-go-client/pkg/logger"
 	sqlitecache "carbonio-files-go-client/pkg/sqlite"
 
@@ -128,23 +129,49 @@ func runGUI() {
 }
 
 // onTrayReady configures the tray icon/tooltip and menu once the tray
-// backend is ready. "Show window" and left-clicking/double-clicking the
-// icon restore the window that HideWindowOnClose kept alive but hidden;
+// backend is ready, localizing every label/tooltip for the host OS
+// locale the same way the dashboard frontend does (see pkg/i18n;
+// DetectAndLoad falls back to English for anything undetected/missing).
+// "Show window" and left-clicking/double-clicking the icon restore the
+// window that HideWindowOnClose kept alive but hidden; "Open sync
+// folder" opens the configured local sync folder in the OS file manager
+// and is disabled until a folder has actually been configured, becoming
+// enabled once SetSyncFolder persists one (App.refreshTrayOpenSyncFolderItem);
 // "Quit" is the only path that actually terminates the app.
 func onTrayReady(app *App) {
-	systray.SetIcon(img.Icon)
-	systray.SetTooltip("Carbonio Files Client")
+	_, catalog := i18n.DetectAndLoad()
+	tr := func(key, fallback string) string {
+		if v, ok := catalog[key]; ok && v != "" {
+			return v
+		}
+		return fallback
+	}
 
-	show := systray.AddMenuItem("Show window", "Show the Carbonio Files Client window")
+	systray.SetIcon(img.Icon)
+	systray.SetTooltip(tr("app.title", "Carbonio Files Client"))
+
+	show := systray.AddMenuItem(tr("tray.showWindow", "Show window"), tr("tray.showWindowTooltip", "Show the Carbonio Files Client window"))
 	show.Click(func() {
 		if app.ctx != nil {
 			wailsruntime.WindowShow(app.ctx)
 		}
 	})
 
+	openSyncFolder := systray.AddMenuItem(tr("tray.openSyncFolder", "Open sync folder"), tr("tray.openSyncFolderTooltip", "Open the local sync folder"))
+	app.setTrayOpenSyncFolderItem(openSyncFolder)
+	// A returning user may already have a folder persisted from a
+	// previous run; a first-time user won't yet (setup wizard runs after
+	// this), and SetSyncFolder re-enables the item once they finish it.
+	app.refreshTrayOpenSyncFolderItem()
+	openSyncFolder.Click(func() {
+		if err := app.OpenSyncFolder(); err != nil {
+			log.Error().Err(err).Msg("Error opening sync folder from tray")
+		}
+	})
+
 	systray.AddSeparator()
 
-	quit := systray.AddMenuItem("Quit", "Quit Carbonio Files Client")
+	quit := systray.AddMenuItem(tr("tray.quit", "Quit"), tr("tray.quitTooltip", "Quit Carbonio Files Client"))
 	quit.Click(func() {
 		if app.ctx != nil {
 			wailsruntime.Quit(app.ctx)

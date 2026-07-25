@@ -1,5 +1,11 @@
 {
   "app.title": "Carbonio Files Client",
+  "tray.showWindow": "Show window",
+  "tray.showWindowTooltip": "Show the Carbonio Files Client window",
+  "tray.openSyncFolder": "Open sync folder",
+  "tray.openSyncFolderTooltip": "Open the local sync folder",
+  "tray.quit": "Quit",
+  "tray.quitTooltip": "Quit Carbonio Files Client",
   "login.heading": "Sign in to Carbonio",
   "login.endpointLabel": "Server",
   "login.endpointPlaceholder": "mail.example.com",
