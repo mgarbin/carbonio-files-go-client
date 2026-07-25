@@ -5,6 +5,7 @@
   import PanelCard from "./ui/PanelCard.svelte";
   import Banner from "./ui/Banner.svelte";
   import Button from "./ui/Button.svelte";
+  import ConfirmDialog from "./ui/ConfirmDialog.svelte";
 
   // Polls the sync cache while the dashboard is open so the "missing
   // locally" counter and the in-progress badge stay live while a sync
@@ -80,6 +81,43 @@
         refreshSyncStatus();
       });
   }
+
+  let resetSyncDialogOpen = false;
+  let resetSyncBusy = false;
+
+  // Opens the "Reset sync" confirmation dialog (see ConfirmDialog below);
+  // nothing is stopped or deleted until the user explicitly accepts it.
+  function openResetSyncDialog() {
+    syncActionError = null;
+    resetSyncDialogOpen = true;
+  }
+
+  // Cancel just closes the dialog - no API call, no state changes.
+  function cancelResetSync() {
+    resetSyncDialogOpen = false;
+  }
+
+  // Accept: stops the sync process and permanently deletes the cached
+  // sync data, including the last sync date (see App.ResetSync). Reuses
+  // the same error banner as toggleSync so sync actions behave
+  // consistently across the dashboard.
+  function confirmResetSync() {
+    resetSyncBusy = true;
+    api
+      .resetSync()
+      .then(() => {
+        resetSyncBusy = false;
+        resetSyncDialogOpen = false;
+        refreshSyncStatus();
+      })
+      .catch((err) => {
+        resetSyncBusy = false;
+        resetSyncDialogOpen = false;
+        syncActionError = "generic";
+        console.error(err);
+        refreshSyncStatus();
+      });
+  }
 </script>
 
 <h2 class="mb-3 mt-0 text-xl font-semibold">{t("dashboard.welcomeTitle")}</h2>
@@ -144,7 +182,7 @@
   <Button variant="primary" full={false} disabled={syncActionBusy} on:click={toggleSync}>
     {syncStatus?.enabled ? t("dashboard.stopSync") : t("dashboard.startSync")}
   </Button>
-  <Button variant="secondary" full={false}>{t("dashboard.resetSync")}</Button>
+  <Button variant="secondary" full={false} on:click={openResetSyncDialog}>{t("dashboard.resetSync")}</Button>
 </div>
 
 {#if syncActionError}
@@ -152,3 +190,16 @@
     <Banner kind="error">{errorMessage(syncActionError)}</Banner>
   </div>
 {/if}
+
+<ConfirmDialog
+  open={resetSyncDialogOpen}
+  busy={resetSyncBusy}
+  danger={true}
+  title={t("dashboard.resetSyncConfirmTitle")}
+  confirmLabel={t("dashboard.resetSyncConfirmAccept")}
+  cancelLabel={t("dashboard.resetSyncConfirmCancel")}
+  on:confirm={confirmResetSync}
+  on:cancel={cancelResetSync}
+>
+  {t("dashboard.resetSyncConfirmBody")}
+</ConfirmDialog>

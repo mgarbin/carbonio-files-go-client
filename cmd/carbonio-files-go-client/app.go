@@ -587,6 +587,50 @@ func (a *App) GetSyncEnabled() bool {
 	return cfg.SyncEnabled
 }
 
+// ResetSync backs the dashboard's "Reset sync" confirmation dialog: once
+// the user accepts the warning, it stops the sync process - the periodic
+// background job, and the persisted "enabled" decision so it doesn't
+// resume on the next login (mirroring SetSyncEnabled(false)) - and then
+// permanently deletes every cached sync record: the filesync table's rows
+// and the last-run outcome tracked in sync_meta, including the last sync
+// date (see SyncStatus.LastSyncedAt), so the dashboard reports "never
+// synced" again. Fails, without deleting anything, if a sync (manual or
+// background) is actively running at the moment it's called - see
+// tryBeginSync; the dialog's Cancel path never calls this at all.
+func (a *App) ResetSync() error {
+	a.stopBackgroundSync()
+	if a.db != nil {
+		if cfg, err := a.db.GetConfig(); err != nil {
+			return err
+		} else if cfg != nil && cfg.SyncEnabled {
+			cfg.SyncEnabled = false
+			if err := a.db.UpdateConfig(*cfg); err != nil {
+				return err
+			}
+		}
+	}
+
+	if !a.tryBeginSync() {
+		return errors.New("a sync is already in progress")
+	}
+	defer a.endSync()
+
+	dbPath := appdir.Path("file_sync_cache.db")
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		return nil
+	}
+	cacheDb, err := sqlitecache.NewSqliteHelper(dbPath)
+	if err != nil {
+		return err
+	}
+	defer cacheDb.Close()
+
+	if err := cacheDb.DeleteAllAndResetAutoIncrement(); err != nil {
+		return err
+	}
+	return cacheDb.ClearSyncMeta()
+}
+
 // GetSyncIntervalMinutes returns the persisted background sync interval, in
 // minutes, or defaultSyncIntervalMinutes if none has been saved yet (e.g.
 // before the first login) or the stored value is no longer one of

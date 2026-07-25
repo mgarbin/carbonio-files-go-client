@@ -19,6 +19,7 @@ export const updateCacheSync = () => backend().UpdateCacheSync();
 export const startFullSync = () => backend().StartFullSync();
 export const getSyncStatus = () => backend().GetSyncStatus();
 export const setSyncEnabled = (enabled) => backend().SetSyncEnabled(enabled);
+export const resetSync = () => backend().ResetSync();
 export const getSyncIntervalMinutes = () => backend().GetSyncIntervalMinutes();
 export const setSyncIntervalMinutes = (minutes) => backend().SetSyncIntervalMinutes(minutes);
 export const getDeleteRemoteNode = () => backend().GetDeleteRemoteNode();

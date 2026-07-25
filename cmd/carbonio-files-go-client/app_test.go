@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"carbonio-files-go-client/pkg/appdir"
 	"carbonio-files-go-client/pkg/carbonio"
 	"carbonio-files-go-client/pkg/logger"
 	sqlitecache "carbonio-files-go-client/pkg/sqlite"
@@ -740,6 +741,135 @@ func TestApp_SetSyncEnabledDoesNotRaceExplicitStartFullSync(t *testing.T) {
 
 	if err := app.StartFullSync(); err != nil && err.Error() == "a sync is already in progress" {
 		t.Fatalf("StartFullSync() right after SetSyncEnabled(true) = %v, want it to never race the background job for the lock", err)
+	}
+}
+
+// TestApp_ResetSyncStopsAndClearsCache verifies ResetSync - the dashboard's
+// "Reset sync" confirmation dialog's Accept action - stops the sync
+// process (persists SyncEnabled=false and cancels the background job, see
+// SetSyncEnabled(false)) and permanently deletes every cached sync record,
+// including the last sync date (SyncStatus.LastSyncedAt), so the
+// dashboard reports "never synced" again afterwards.
+func TestApp_ResetSyncStopsAndClearsCache(t *testing.T) {
+	// appdir.Path("file_sync_cache.db") resolves under $HOME: redirect it
+	// to a throwaway directory so this test can freely populate and wipe
+	// the cache DB without touching a real developer/CI cache.
+	t.Setenv("HOME", t.TempDir())
+
+	const user, pass = "user@example.com", "s3cret"
+	endpoint := newFakeCarbonioServer(t, user, pass)
+	dbPath := filepath.Join(t.TempDir(), "gui-config.db")
+
+	app := openTestApp(t, dbPath)
+	defer app.db.Close()
+	defer app.stopBackgroundSync()
+
+	if result := app.Login(endpoint, user, pass); !result.Success {
+		t.Fatalf("Login() = %+v, want Success=true", result)
+	}
+	syncDir := filepath.Join(t.TempDir(), "carbonio-sync")
+	if err := app.SetSyncFolder(syncDir); err != nil {
+		t.Fatalf("SetSyncFolder() error = %v", err)
+	}
+	if err := app.SetSyncEnabled(true); err != nil {
+		t.Fatalf("SetSyncEnabled(true) error = %v", err)
+	}
+	if app.syncJobCancel == nil {
+		t.Fatalf("SetSyncEnabled(true) did not start the background job (setup)")
+	}
+
+	// Seed the cache DB with a fake filesync record and a recorded run, as
+	// if a previous UpdateCacheSync had already populated it.
+	cacheDb, err := sqlitecache.NewSqliteHelper(appdir.Path("file_sync_cache.db"))
+	if err != nil {
+		t.Fatalf("NewSqliteHelper() error = %v", err)
+	}
+	if _, err := cacheDb.InsertFileSync(
+		"node-1", "parent-1", "/remote/a.txt", "rhash", "/local/a.txt", "lhash",
+		false, "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z", 10, 10,
+		"rdigest", "ldigest", "in_sync", "2024-01-01T00:00:00Z", 0, 0,
+	); err != nil {
+		t.Fatalf("InsertFileSync() error = %v", err)
+	}
+	if err := cacheDb.SetSyncRunResult("2024-01-01T00:00:00Z", ""); err != nil {
+		t.Fatalf("SetSyncRunResult() error = %v", err)
+	}
+	if err := cacheDb.Close(); err != nil {
+		t.Fatalf("cacheDb.Close() error = %v", err)
+	}
+
+	if err := app.ResetSync(); err != nil {
+		t.Fatalf("ResetSync() error = %v", err)
+	}
+
+	if app.GetSyncEnabled() {
+		t.Fatalf("GetSyncEnabled() = true after ResetSync(), want false")
+	}
+	if app.syncJobCancel != nil {
+		t.Fatalf("ResetSync() left the background sync job running, want it stopped")
+	}
+
+	status, err := app.GetSyncStatus()
+	if err != nil {
+		t.Fatalf("GetSyncStatus() error = %v", err)
+	}
+	if status.LastSyncedAt != "" {
+		t.Fatalf("GetSyncStatus().LastSyncedAt = %q after ResetSync(), want empty (never synced)", status.LastSyncedAt)
+	}
+	if status.RemoteItems != 0 || status.LocalItems != 0 {
+		t.Fatalf("GetSyncStatus() = %+v after ResetSync(), want every cached count back to zero", status)
+	}
+
+	verifyDb, err := sqlitecache.NewSqliteHelper(appdir.Path("file_sync_cache.db"))
+	if err != nil {
+		t.Fatalf("NewSqliteHelper() error = %v", err)
+	}
+	defer verifyDb.Close()
+	if count, err := verifyDb.CountRecords(); err != nil {
+		t.Fatalf("CountRecords() error = %v", err)
+	} else if count != 0 {
+		t.Fatalf("CountRecords() = %d after ResetSync(), want 0", count)
+	}
+	if meta, err := verifyDb.GetSyncMeta(); err != nil {
+		t.Fatalf("GetSyncMeta() error = %v", err)
+	} else if meta != nil {
+		t.Fatalf("GetSyncMeta() = %+v after ResetSync(), want nil (never synced)", meta)
+	}
+}
+
+// TestApp_ResetSyncRejectedWhileAnotherSyncRuns verifies ResetSync refuses
+// to touch the cache DB while another sync (manual or background) already
+// holds the sync lock - clearing filesync rows out from under an
+// in-progress UpdateCacheSync/LiveCacheSync write would corrupt it. The
+// dashboard's dialog surfaces this as its generic error banner, leaving
+// the cached data intact for a retry.
+func TestApp_ResetSyncRejectedWhileAnotherSyncRuns(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	const user, pass = "user@example.com", "s3cret"
+	endpoint := newFakeCarbonioServer(t, user, pass)
+	dbPath := filepath.Join(t.TempDir(), "gui-config.db")
+
+	app := openTestApp(t, dbPath)
+	defer app.db.Close()
+	defer app.stopBackgroundSync()
+
+	if result := app.Login(endpoint, user, pass); !result.Success {
+		t.Fatalf("Login() = %+v, want Success=true", result)
+	}
+	syncDir := filepath.Join(t.TempDir(), "carbonio-sync")
+	if err := app.SetSyncFolder(syncDir); err != nil {
+		t.Fatalf("SetSyncFolder() error = %v", err)
+	}
+
+	// Simulate another sync operation already running.
+	if !app.tryBeginSync() {
+		t.Fatalf("tryBeginSync() = false, want true (setup)")
+	}
+	err := app.ResetSync()
+	app.endSync()
+	if err == nil {
+		t.Fatalf("ResetSync() while another sync is running = nil error, want an error")
 	}
 }
 

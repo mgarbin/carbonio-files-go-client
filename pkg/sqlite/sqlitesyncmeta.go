@@ -48,6 +48,15 @@ func (h *SqliteHelper) SetSyncRunResult(lastRunAt, lastError string) error {
 	return err
 }
 
+// ClearSyncMeta deletes the singleton sync_meta row, if any, so
+// GetSyncMeta reports "never run yet" (nil, nil) again. Used by the GUI's
+// ResetSync to wipe the last-sync timestamp/error alongside the filesync
+// cache rows (see App.ResetSync).
+func (h *SqliteHelper) ClearSyncMeta() error {
+	_, err := h.DB.Exec(`DELETE FROM sync_meta WHERE id = 1`)
+	return err
+}
+
 // CountBySyncStatus returns the number of filesync records with the given
 // sync_status value (e.g. "remote_only" for items still missing locally).
 func (h *SqliteHelper) CountBySyncStatus(status string) (int, error) {

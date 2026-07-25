@@ -34,6 +34,33 @@ func TestSyncMetaCRUD(t *testing.T) {
 	}
 }
 
+// TestClearSyncMeta verifies ClearSyncMeta wipes the singleton sync_meta
+// row so a subsequent GetSyncMeta reports "never run yet" (nil, nil)
+// again - used by the GUI's ResetSync to clear the dashboard's last sync
+// date alongside the filesync cache rows.
+func TestClearSyncMeta(t *testing.T) {
+	h, _ := newTestHelper(t)
+
+	if err := h.SetSyncRunResult("2026-01-01T10:00:00Z", ""); err != nil {
+		t.Fatalf("SetSyncRunResult() error = %v", err)
+	}
+	if meta, err := h.GetSyncMeta(); err != nil || meta == nil {
+		t.Fatalf("GetSyncMeta() before ClearSyncMeta() = (%+v, %v), want a recorded run (setup)", meta, err)
+	}
+
+	if err := h.ClearSyncMeta(); err != nil {
+		t.Fatalf("ClearSyncMeta() error = %v", err)
+	}
+	if meta, err := h.GetSyncMeta(); err != nil || meta != nil {
+		t.Fatalf("GetSyncMeta() after ClearSyncMeta() = (%+v, %v), want (nil, nil)", meta, err)
+	}
+
+	// Clearing again (nothing left to delete) must not error.
+	if err := h.ClearSyncMeta(); err != nil {
+		t.Fatalf("ClearSyncMeta() on an already-empty table error = %v", err)
+	}
+}
+
 func TestCountBySyncStatusAndPresence(t *testing.T) {
 	h, _ := newTestHelper(t)
 
