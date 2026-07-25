@@ -103,7 +103,7 @@ func runGUI() {
 	startTray()
 
 	err = wails.Run(&options.App{
-		Title:             "Carbonio Files Client",
+		Title:             "Carbonio Files Sync",
 		Width:             1024,
 		Height:            720,
 		MinWidth:          860,
@@ -148,9 +148,9 @@ func onTrayReady(app *App) {
 	}
 
 	systray.SetIcon(img.Icon)
-	systray.SetTooltip(tr("app.title", "Carbonio Files Client"))
+	systray.SetTooltip(tr("app.title", "Carbonio Files Sync"))
 
-	show := systray.AddMenuItem(tr("tray.showWindow", "Show window"), tr("tray.showWindowTooltip", "Show the Carbonio Files Client window"))
+	show := systray.AddMenuItem(tr("tray.showWindow", "Show window"), tr("tray.showWindowTooltip", "Show the Carbonio Files Sync window"))
 	show.Click(func() {
 		if app.ctx != nil {
 			wailsruntime.WindowShow(app.ctx)
@@ -171,7 +171,7 @@ func onTrayReady(app *App) {
 
 	systray.AddSeparator()
 
-	quit := systray.AddMenuItem(tr("tray.quit", "Quit"), tr("tray.quitTooltip", "Quit Carbonio Files Client"))
+	quit := systray.AddMenuItem(tr("tray.quit", "Quit"), tr("tray.quitTooltip", "Quit Carbonio Files Sync"))
 	quit.Click(func() {
 		if app.ctx != nil {
 			wailsruntime.Quit(app.ctx)
