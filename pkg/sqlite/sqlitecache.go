@@ -35,6 +35,17 @@ type FileSyncRecord struct {
 	LastSynced         string
 	LocalDeleted       int
 	RemoteDeleted      int
+	// CanWriteFile, CanAddVersion and CanDelete mirror the remote node's
+	// permissions.can_write_file / can_add_version / can_delete GraphQL
+	// fields (see pkg/graphql.Permissions). They are meaningless for
+	// local-only records (no remote node yet) and default to false.
+	CanWriteFile  bool
+	CanAddVersion bool
+	CanDelete     bool
+	// MimeType mirrors the remote node's mime_type GraphQL field. It is
+	// only populated for files; folders and local-only records leave it
+	// empty.
+	MimeType string
 }
 
 // NewSqliteHelper crea/apre il database e assicura che la tabella filesync esista.
@@ -97,6 +108,17 @@ func NewSqliteHelper(dbPath string) (*SqliteHelper, error) {
 		return nil, fmt.Errorf("errore creando la tabella filesync: %w", err)
 	}
 
+	// Migrate databases created before the remote permissions/mime_type
+	// columns existed.
+	for _, col := range []string{"can_write_file", "can_add_version", "can_delete"} {
+		if err := addColumnIfMissing(db, "filesync", col, "INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return nil, fmt.Errorf("errore aggiornando la tabella filesync: %w", err)
+		}
+	}
+	if err := addColumnIfMissing(db, "filesync", "mime_type", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return nil, fmt.Errorf("errore aggiornando la tabella filesync: %w", err)
+	}
+
 	createIndexesSQL := []string{
 		`CREATE INDEX IF NOT EXISTS idx_filesync_remote_path_dir_del ON filesync (remote_path, is_directory, remote_deleted);`,
 		`CREATE INDEX IF NOT EXISTS idx_filesync_local_path_dir_del ON filesync (local_path, is_directory, local_deleted);`,
@@ -137,15 +159,19 @@ func (h *SqliteHelper) InsertFileSync(
 	remoteSize, localSize int64,
 	remoteDigest, localDigest, syncStatus, lastSynced string,
 	localDeleted, remoteDeleted int,
+	canWriteFile, canAddVersion, canDelete bool,
+	mimeType string,
 ) (int64, error) {
 	stmt := `
         INSERT INTO filesync (
             node_id, parent_id, remote_path, remote_path_hash, local_path, local_path_hash, is_directory, remote_last_modified, local_last_modified,
-            remote_size, local_size, remote_digest, local_digest, sync_status, last_synced, local_deleted, remote_deleted
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            remote_size, local_size, remote_digest, local_digest, sync_status, last_synced, local_deleted, remote_deleted,
+            can_write_file, can_add_version, can_delete, mime_type
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	res, err := h.DB.Exec(stmt,
 		nodeID, parentID, remotePath, remotePathHash, localPath, localPathHash, isDirectory, remoteLastModified, localLastModified,
-		remoteSize, localSize, remoteDigest, localDigest, syncStatus, lastSynced, localDeleted, remoteDeleted)
+		remoteSize, localSize, remoteDigest, localDigest, syncStatus, lastSynced, localDeleted, remoteDeleted,
+		canWriteFile, canAddVersion, canDelete, mimeType)
 	if err != nil {
 		return 0, err
 	}
@@ -216,7 +242,8 @@ func (h *SqliteHelper) Close() error {
 
 const selectAllColumns = `SELECT id, node_id, parent_id, remote_path, remote_path_hash, local_path, local_path_hash,
 	is_directory, remote_last_modified, local_last_modified, remote_size, local_size,
-	remote_digest, local_digest, sync_status, last_synced, local_deleted, remote_deleted FROM filesync`
+	remote_digest, local_digest, sync_status, last_synced, local_deleted, remote_deleted,
+	can_write_file, can_add_version, can_delete, mime_type FROM filesync`
 
 // QueryAll returns all records from the filesync table.
 func (h *SqliteHelper) QueryAll() ([]FileSyncRecord, error) {
@@ -292,7 +319,7 @@ func scanFileSyncRows(rows *sql.Rows) ([]FileSyncRecord, error) {
 	var records []FileSyncRecord
 	for rows.Next() {
 		var rec FileSyncRecord
-		var isDirInt int
+		var isDirInt, canWriteFileInt, canAddVersionInt, canDeleteInt int
 		err := rows.Scan(
 			&rec.ID, &rec.NodeID, &rec.ParentID,
 			&rec.RemotePath, &rec.RemotePathHash,
@@ -303,11 +330,15 @@ func scanFileSyncRows(rows *sql.Rows) ([]FileSyncRecord, error) {
 			&rec.RemoteDigest, &rec.LocalDigest,
 			&rec.SyncStatus, &rec.LastSynced,
 			&rec.LocalDeleted, &rec.RemoteDeleted,
+			&canWriteFileInt, &canAddVersionInt, &canDeleteInt, &rec.MimeType,
 		)
 		if err != nil {
 			return nil, err
 		}
 		rec.IsDirectory = isDirInt != 0
+		rec.CanWriteFile = canWriteFileInt != 0
+		rec.CanAddVersion = canAddVersionInt != 0
+		rec.CanDelete = canDeleteInt != 0
 		records = append(records, rec)
 	}
 	return records, rows.Err()

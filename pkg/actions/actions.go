@@ -328,6 +328,13 @@ func updateCacheSync(endpoint, authToken, localFolder string) error {
 						hasContentUpdate = true
 						log.Info().Str("path", rec.RemotePath).Msg("Remote node updated")
 					}
+					if remoteItem.CanWriteFile != rec.CanWriteFile || remoteItem.CanAddVersion != rec.CanAddVersion ||
+						remoteItem.CanDelete != rec.CanDelete || remoteItem.MimeType != rec.MimeType {
+						updateFields["can_write_file"] = remoteItem.CanWriteFile
+						updateFields["can_add_version"] = remoteItem.CanAddVersion
+						updateFields["can_delete"] = remoteItem.CanDelete
+						updateFields["mime_type"] = remoteItem.MimeType
+					}
 				}
 			}
 
@@ -423,6 +430,10 @@ func updateCacheSync(endpoint, authToken, localFolder string) error {
 		localDigest := ""
 		localDeleted := 0
 		remoteDeleted := 0
+		canWriteFile := false
+		canAddVersion := false
+		canDelete := false
+		mimeType := ""
 
 		if hasRemote {
 			remotePath = itemPath
@@ -435,6 +446,10 @@ func updateCacheSync(endpoint, authToken, localFolder string) error {
 			if remoteItem.DeleteTimestamp != 0 {
 				remoteDeleted = 1
 			}
+			canWriteFile = remoteItem.CanWriteFile
+			canAddVersion = remoteItem.CanAddVersion
+			canDelete = remoteItem.CanDelete
+			mimeType = remoteItem.MimeType
 		}
 
 		if hasLocal {
@@ -467,6 +482,7 @@ func updateCacheSync(endpoint, authToken, localFolder string) error {
 			remoteSize, localSize,
 			remoteDigest, localDigest, syncStatus, now,
 			localDeleted, remoteDeleted,
+			canWriteFile, canAddVersion, canDelete, mimeType,
 		)
 		if insertErr != nil {
 			log.Error().Err(insertErr).Str("path", itemPath).Msg("Inserting record failed")

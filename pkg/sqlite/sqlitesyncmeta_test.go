@@ -79,7 +79,7 @@ func TestCountBySyncStatusAndPresence(t *testing.T) {
 		{"/f.txt", "/local/f.txt", "local_deleted", 0, 1},  // local copy removed, remote still present
 	}
 	for _, r := range rows {
-		if _, err := h.InsertFileSync("node-"+r.remotePath, "", r.remotePath, "", r.localPath, "", false, "", "", 0, 0, "", "", r.syncStatus, "", r.localDeleted, r.remoteDeleted); err != nil {
+		if _, err := h.InsertFileSync("node-"+r.remotePath, "", r.remotePath, "", r.localPath, "", false, "", "", 0, 0, "", "", r.syncStatus, "", r.localDeleted, r.remoteDeleted, false, false, false, ""); err != nil {
 			t.Fatalf("InsertFileSync(%s): %v", r.remotePath, err)
 		}
 	}
@@ -112,7 +112,7 @@ func TestCountPendingChanges(t *testing.T) {
 	}
 
 	// Fully synced record: not pending.
-	if _, err := h.InsertFileSync("n1", "", "/synced.txt", "", "/local/synced.txt", "", false, "", "", 0, 0, "", "", "synced", "", 0, 0); err != nil {
+	if _, err := h.InsertFileSync("n1", "", "/synced.txt", "", "/local/synced.txt", "", false, "", "", 0, 0, "", "", "synced", "", 0, 0, false, false, false, ""); err != nil {
 		t.Fatalf("InsertFileSync(synced): %v", err)
 	}
 	if got, err := h.CountPendingChanges(); err != nil || got != 0 {
@@ -120,13 +120,13 @@ func TestCountPendingChanges(t *testing.T) {
 	}
 
 	// remote_only, local_only, out_of_sync: each pending.
-	if _, err := h.InsertFileSync("n2", "", "/remote-only.txt", "", "", "", false, "", "", 0, 0, "", "", "remote_only", "", 0, 0); err != nil {
+	if _, err := h.InsertFileSync("n2", "", "/remote-only.txt", "", "", "", false, "", "", 0, 0, "", "", "remote_only", "", 0, 0, false, false, false, ""); err != nil {
 		t.Fatalf("InsertFileSync(remote_only): %v", err)
 	}
-	if _, err := h.InsertFileSync("", "", "", "", "/local-only.txt", "", false, "", "", 0, 0, "", "", "local_only", "", 0, 0); err != nil {
+	if _, err := h.InsertFileSync("", "", "", "", "/local-only.txt", "", false, "", "", 0, 0, "", "", "local_only", "", 0, 0, false, false, false, ""); err != nil {
 		t.Fatalf("InsertFileSync(local_only): %v", err)
 	}
-	if _, err := h.InsertFileSync("n3", "", "/out-of-sync.txt", "", "/local/out-of-sync.txt", "", false, "", "", 0, 0, "", "", "out_of_sync", "", 0, 0); err != nil {
+	if _, err := h.InsertFileSync("n3", "", "/out-of-sync.txt", "", "/local/out-of-sync.txt", "", false, "", "", 0, 0, "", "", "out_of_sync", "", 0, 0, false, false, false, ""); err != nil {
 		t.Fatalf("InsertFileSync(out_of_sync): %v", err)
 	}
 	if got, err := h.CountPendingChanges(); err != nil || got != 3 {
@@ -135,7 +135,7 @@ func TestCountPendingChanges(t *testing.T) {
 
 	// A remote deletion not yet propagated locally (matches QueryRemoteDeleted's
 	// condition) counts as pending...
-	if _, err := h.InsertFileSync("n4", "", "/remote-deleted.txt", "", "/local/remote-deleted.txt", "", false, "", "", 0, 0, "", "", "synced", "", 0, 1); err != nil {
+	if _, err := h.InsertFileSync("n4", "", "/remote-deleted.txt", "", "/local/remote-deleted.txt", "", false, "", "", 0, 0, "", "", "synced", "", 0, 1, false, false, false, ""); err != nil {
 		t.Fatalf("InsertFileSync(remote_deleted pending): %v", err)
 	}
 	if got, err := h.CountPendingChanges(); err != nil || got != 4 {

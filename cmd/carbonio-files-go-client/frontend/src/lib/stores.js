@@ -46,6 +46,16 @@ export function freshLogging() {
 }
 export const logging = writable(freshLogging());
 
+// ---------- Docs Online browser ----------
+// tree is the root DocsOnlineNode (see App.GetDocsOnlineTree), containing
+// the whole filtered remote folder/file tree - fetched once per session
+// and navigated client-side from there. path is the list of folder nodes
+// (root excluded) currently drilled into, driving the breadcrumb.
+export function freshDocsOnline() {
+  return { loaded: false, loading: false, tree: null, path: [], error: null };
+}
+export const docsOnline = writable(freshDocsOnline());
+
 // resetSessionState restores every per-session store to its pristine state.
 // Called on logout so the next login starts clean.
 export function resetSessionState() {
@@ -56,4 +66,5 @@ export function resetSessionState() {
   syncFolder.set(freshSyncFolder());
   syncInterval.set(freshSyncInterval());
   logging.set(freshLogging());
+  docsOnline.set(freshDocsOnline());
 }
