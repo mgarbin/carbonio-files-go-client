@@ -2,6 +2,7 @@
   import { section } from "../lib/stores";
   import Sidebar from "./Sidebar.svelte";
   import DashboardHome from "./DashboardHome.svelte";
+  import DocsOnlineBoard from "./DocsOnlineBoard.svelte";
   import AuthenticationPanel from "./AuthenticationPanel.svelte";
   import SyncFolderPanel from "./SyncFolderPanel.svelte";
   import SyncIntervalPanel from "./SyncIntervalPanel.svelte";
@@ -13,6 +14,8 @@
   <div class="flex-1 overflow-auto p-8 sm:p-10">
     {#if $section === "authentication"}
       <AuthenticationPanel />
+    {:else if $section === "docsOnline"}
+      <DocsOnlineBoard />
     {:else if $section === "syncFolder"}
       <SyncFolderPanel />
     {:else if $section === "syncInterval"}

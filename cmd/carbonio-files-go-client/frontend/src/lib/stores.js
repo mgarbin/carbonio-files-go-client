@@ -4,7 +4,7 @@ import { writable } from "svelte/store";
 export const booting = writable(true);
 export const translations = writable({});
 export const view = writable("login"); // 'login' | 'sync-setup' | 'dashboard'
-export const section = writable("dashboard"); // 'dashboard' | 'authentication' | 'syncFolder' | 'syncInterval' | 'logging'
+export const section = writable("dashboard"); // 'dashboard' | 'docsOnline' | 'authentication' | 'syncFolder' | 'syncInterval' | 'logging'
 export const session = writable(null); // { endpoint, username } | null
 
 // ---------- Login screen ----------
