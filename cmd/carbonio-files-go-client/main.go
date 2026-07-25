@@ -133,7 +133,6 @@ func runGUI() {
 // "Quit" is the only path that actually terminates the app.
 func onTrayReady(app *App) {
 	systray.SetIcon(img.Icon)
-	systray.SetTitle("Carbonio Files Client")
 	systray.SetTooltip("Carbonio Files Client")
 
 	show := systray.AddMenuItem("Show window", "Show the Carbonio Files Client window")
