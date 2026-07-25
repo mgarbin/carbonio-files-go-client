@@ -22,7 +22,7 @@
 <div class="flex w-60 flex-shrink-0 flex-col border-r border-border bg-surface p-3">
   <button
     type="button"
-    class="mb-1 block w-full rounded px-2.5 py-2.5 text-left text-base font-bold text-brand-dark transition-colors {$section === 'dashboard' ? 'bg-brand/[0.2]' : 'bg-brand/[0.12] hover:bg-brand/[0.2]'}"
+    class="mb-1 block w-full rounded px-2.5 py-2.5 text-left text-base font-bold transition-colors {$section === 'dashboard' ? 'bg-brand/[0.2]' : 'bg-brand/[0.12] hover:bg-brand/[0.2]'}"
     on:click={() => go("dashboard")}
   >
     {t("menu.dashboard")}

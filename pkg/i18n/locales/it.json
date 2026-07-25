@@ -32,7 +32,7 @@
   "menu.syncFolder": "Cartella di sincronizzazione",
   "menu.syncInterval": "Sincronizzazione",
   "menu.logging": "Registro eventi",
-  "dashboard.welcomeTitle": "Bentornato",
+  "dashboard.welcomeTitle": "Benvenuto",
   "dashboard.description": "Carbonio Files Sync mantiene automaticamente sincronizzata una cartella locale su questo dispositivo con i tuoi file salvati su Carbonio, cos\u00ec i tuoi documenti restano aggiornati e disponibili anche offline.",
   "dashboard.syncStatusTitle": "Stato sincronizzazione",
   "dashboard.syncStatusLabel": "Stato",

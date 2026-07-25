@@ -32,7 +32,7 @@
   "menu.syncFolder": "Sync folder",
   "menu.syncInterval": "Synchronization",
   "menu.logging": "Logging",
-  "dashboard.welcomeTitle": "Welcome back",
+  "dashboard.welcomeTitle": "Welcome",
   "dashboard.description": "Carbonio Files Sync keeps a local folder on this device automatically synchronized with your files stored on Carbonio, so your documents stay up to date and available offline.",
   "dashboard.syncStatusTitle": "Sync status",
   "dashboard.syncStatusLabel": "Status",
