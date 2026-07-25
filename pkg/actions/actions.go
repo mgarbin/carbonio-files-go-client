@@ -103,6 +103,27 @@ func MoveNodes(endpoint, authToken, destinationId, nodesIdList string) error {
 	return nil
 }
 
+// DeleteModeTrash and DeleteModeDelete are the two values accepted for the
+// "deleteRemoteNode" preference (config.yaml Sync.deleteRemoteNode or the
+// GUI's Preferences > Synchronization dropdown, persisted as
+// sqlitecache.ConfigRecord.DeleteRemoteNode). They select which action
+// LiveCacheSync uses to propagate a local deletion to the remote node: see
+// resolveDeleteMode.
+const (
+	DeleteModeTrash  = "trash"
+	DeleteModeDelete = "delete"
+)
+
+// resolveDeleteMode normalizes mode to a valid DeleteMode* constant,
+// defaulting to DeleteModeTrash for "" or any unrecognized value so a
+// missing/legacy preference never turns into a permanent deletion.
+func resolveDeleteMode(mode string) string {
+	if mode == DeleteModeDelete {
+		return DeleteModeDelete
+	}
+	return DeleteModeTrash
+}
+
 // TrashNodes moves the comma-separated nodesIdList to trash. Backs the
 // -trashNodes flag. A non-nil error means the caller should abort, the
 // message has already been printed.
@@ -466,9 +487,13 @@ func updateCacheSync(endpoint, authToken, localFolder string) error {
 // LiveCacheSync reconciles localFolder and the remote tree using the sqlite
 // sync cache: it downloads remote-only items, uploads local-only items,
 // resolves out-of-sync items by timestamp, and propagates deletions in both
-// directions. Backs the -liveCacheSync flag. A non-nil error means the
-// caller should abort, the message has already been printed.
-func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbonio.HTTPAuthenticator) error {
+// directions. Backs the -liveCacheSync flag. deleteRemoteNode selects how
+// a local deletion is propagated to the remote node - DeleteModeTrash (or
+// "", the default) moves it to trash, DeleteModeDelete permanently
+// removes it; any other value falls back to DeleteModeTrash (see
+// resolveDeleteMode). A non-nil error means the caller should abort, the
+// message has already been printed.
+func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbonio.HTTPAuthenticator, deleteRemoteNode string) error {
 
 	// Open the existing SQLite cache database
 	cacheDb, err := sqlitecache.NewSqliteHelper(appdir.Path("file_sync_cache.db"))
@@ -833,13 +858,15 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 		}
 	}
 
-	// --- Trash remote items whose local counterpart has been deleted ---
+	// --- Trash or permanently delete remote items whose local counterpart
+	// has been deleted, per resolveDeleteMode(deleteRemoteNode) ---
+	resolvedDeleteMode := resolveDeleteMode(deleteRemoteNode)
 	localDeleted, err := cacheDb.QueryLocalDeleted()
 	if err != nil {
 		log.Error().Err(err).Msg("Querying local deleted failed")
 		return err
 	}
-	log.Info().Int("count", len(localDeleted)).Msg("Found locally deleted items to remove from remote")
+	log.Info().Int("count", len(localDeleted)).Str("deleteRemoteNode", resolvedDeleteMode).Msg("Found locally deleted items to remove from remote")
 
 	// Process deepest paths first so child files/dirs are removed before their parents.
 	sort.Slice(localDeleted, func(i, j int) bool {
@@ -852,12 +879,17 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 	})
 
 	for _, rec := range localDeleted {
-		_, trashErr := graphqlAuthenticator.TrashNodes([]string{rec.NodeID})
-		if trashErr != nil {
-			log.Error().Err(trashErr).Str("path", rec.RemotePath).Str("nodeId", rec.NodeID).Msg("Trashing remote item failed")
+		var opErr error
+		if resolvedDeleteMode == DeleteModeDelete {
+			_, opErr = graphqlAuthenticator.DeleteNodes([]string{rec.NodeID})
+		} else {
+			_, opErr = graphqlAuthenticator.TrashNodes([]string{rec.NodeID})
+		}
+		if opErr != nil {
+			log.Error().Err(opErr).Str("path", rec.RemotePath).Str("nodeId", rec.NodeID).Str("deleteRemoteNode", resolvedDeleteMode).Msg("Removing remote item failed")
 			continue
 		}
-		log.Info().Str("path", rec.RemotePath).Msg("Trashed remote item (local was deleted)")
+		log.Info().Str("path", rec.RemotePath).Str("deleteRemoteNode", resolvedDeleteMode).Msg("Removed remote item (local was deleted)")
 		if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
 			"remote_deleted": 1,
 			"sync_status":    "local_deleted",
@@ -874,14 +906,16 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 // FullCacheSync runs UpdateCacheSync followed by LiveCacheSync against
 // localFolder: it first (re)builds the sqlite sync cache from the current
 // local/remote state, then performs the bidirectional sync using that
-// freshly updated cache. Backs the -fullCacheSync flag. A non-nil error
-// means the caller should abort, the message has already been printed.
-func FullCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbonio.HTTPAuthenticator) error {
+// freshly updated cache. Backs the -fullCacheSync flag. deleteRemoteNode
+// is forwarded to LiveCacheSync verbatim - see its doc comment. A non-nil
+// error means the caller should abort, the message has already been
+// printed.
+func FullCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbonio.HTTPAuthenticator, deleteRemoteNode string) error {
 	if err := UpdateCacheSync(endpoint, authToken, localFolder); err != nil {
 		return err
 	}
 
-	if err := LiveCacheSync(endpoint, authToken, localFolder, carbonioAuth); err != nil {
+	if err := LiveCacheSync(endpoint, authToken, localFolder, carbonioAuth, deleteRemoteNode); err != nil {
 		return err
 	}
 

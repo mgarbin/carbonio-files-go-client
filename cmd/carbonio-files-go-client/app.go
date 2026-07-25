@@ -36,6 +36,18 @@ const defaultSyncIntervalMinutes = 5
 // Synchronization dropdown.
 var validSyncIntervalsMinutes = []int{5, 15, 30, 60}
 
+// defaultDeleteRemoteNode is the "remote delete mode" the background sync
+// job (and actions.LiveCacheSync/FullCacheSync generally) falls back to
+// when no preference has been saved yet - also the dashboard's Preferences
+// > Synchronization "Modalità di eliminazione degli oggetti remoti"
+// dropdown's default selection.
+const defaultDeleteRemoteNode = actions.DeleteModeTrash
+
+// validDeleteRemoteNodeValues are the only values SetDeleteRemoteNode
+// accepts, and the exact choices offered by the dashboard's Preferences >
+// Synchronization "Modalità di eliminazione degli oggetti remoti" dropdown.
+var validDeleteRemoteNodeValues = []string{actions.DeleteModeTrash, actions.DeleteModeDelete}
+
 // App is the Wails-bound backend for the desktop GUI. Every exported method
 // is callable from the frontend as window.go.main.App.<Method>.
 type App struct {
@@ -472,7 +484,7 @@ func (a *App) StartFullSync() error {
 		return errors.New("a sync is already in progress")
 	}
 	defer a.endSync()
-	return actions.FullCacheSync(session.Endpoint, session.Token, folder.Path, a.auth)
+	return actions.FullCacheSync(session.Endpoint, session.Token, folder.Path, a.auth, a.GetDeleteRemoteNode())
 }
 
 // tryBeginSync attempts to acquire exclusive access for a sync operation:
@@ -627,6 +639,55 @@ func isValidSyncInterval(minutes int) bool {
 	return false
 }
 
+// GetDeleteRemoteNode returns the persisted "remote delete mode"
+// preference - actions.DeleteModeTrash or actions.DeleteModeDelete - or
+// defaultDeleteRemoteNode if none has been saved yet (e.g. before the
+// first login) or the stored value is no longer one of
+// validDeleteRemoteNodeValues.
+func (a *App) GetDeleteRemoteNode() string {
+	if a.db != nil {
+		if cfg, err := a.db.GetConfig(); err == nil && cfg != nil && isValidDeleteRemoteNode(cfg.DeleteRemoteNode) {
+			return cfg.DeleteRemoteNode
+		}
+	}
+	return defaultDeleteRemoteNode
+}
+
+// SetDeleteRemoteNode persists the dashboard's Preferences > Synchronization
+// "Modalità di eliminazione degli oggetti remoti" dropdown choice (see
+// sqlitecache.ConfigRecord.DeleteRemoteNode). Unlike the sync interval,
+// this preference is read fresh on every sync cycle (see
+// runBackgroundSyncCycle/StartFullSync), so no running job needs
+// restarting for it to take effect.
+func (a *App) SetDeleteRemoteNode(mode string) error {
+	if !isValidDeleteRemoteNode(mode) {
+		return fmt.Errorf("invalid remote delete mode: %q (must be one of %v)", mode, validDeleteRemoteNodeValues)
+	}
+	if a.db == nil {
+		return errors.New("credential store unavailable")
+	}
+	cfg, err := a.db.GetConfig()
+	if err != nil {
+		return err
+	}
+	if cfg == nil {
+		return errors.New("log in first: the remote delete mode is stored alongside your saved credentials")
+	}
+	cfg.DeleteRemoteNode = mode
+	return a.db.UpdateConfig(*cfg)
+}
+
+// isValidDeleteRemoteNode reports whether mode is one of
+// validDeleteRemoteNodeValues.
+func isValidDeleteRemoteNode(mode string) bool {
+	for _, v := range validDeleteRemoteNodeValues {
+		if v == mode {
+			return true
+		}
+	}
+	return false
+}
+
 // restartBackgroundSyncJobIfRunning restarts the periodic background sync
 // job so a just-changed interval (see SetSyncIntervalMinutes) applies to
 // its ticker right away. No-ops if the job isn't currently running - it
@@ -731,7 +792,7 @@ func (a *App) runBackgroundSyncCycle() {
 	}
 
 	log.Info().Int("pending", pending).Msg("Background sync: changes detected, running liveCacheSync")
-	if err := actions.LiveCacheSync(endpoint, token, folder.Path, a.auth); err != nil {
+	if err := actions.LiveCacheSync(endpoint, token, folder.Path, a.auth, a.GetDeleteRemoteNode()); err != nil {
 		log.Error().Err(err).Msg("Background sync: liveCacheSync failed")
 	}
 }

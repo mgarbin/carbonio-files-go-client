@@ -40,6 +40,7 @@ func TestConfigCRUD(t *testing.T) {
 		LogPath:             "/tmp/carbonio-test.log",
 		SyncEnabled:         true,
 		SyncIntervalMinutes: 15,
+		DeleteRemoteNode:    "delete",
 	}
 	if err := h.CreateConfig(in); err != nil {
 		t.Fatalf("CreateConfig() error = %v", err)
@@ -59,7 +60,7 @@ func TestConfigCRUD(t *testing.T) {
 	}
 	if got.Endpoint != in.Endpoint || got.Username != in.Username || got.Password != in.Password || got.AuthToken != in.AuthToken || got.FilesLocalFolder != in.FilesLocalFolder ||
 		got.LogLevel != in.LogLevel || got.LogFormat != in.LogFormat || got.LogOutput != in.LogOutput || got.LogPath != in.LogPath || got.SyncEnabled != in.SyncEnabled ||
-		got.SyncIntervalMinutes != in.SyncIntervalMinutes {
+		got.SyncIntervalMinutes != in.SyncIntervalMinutes || got.DeleteRemoteNode != in.DeleteRemoteNode {
 		t.Fatalf("GetConfig() = %+v, want fields matching %+v", got, in)
 	}
 	if got.CreatedAt == "" || got.UpdatedAt == "" {
@@ -79,6 +80,7 @@ func TestConfigCRUD(t *testing.T) {
 		LogPath:             "/tmp/carbonio-other.log",
 		SyncEnabled:         false,
 		SyncIntervalMinutes: 60,
+		DeleteRemoteNode:    "trash",
 	}
 	if err := h.UpdateConfig(updated); err != nil {
 		t.Fatalf("UpdateConfig() error = %v", err)
@@ -89,7 +91,7 @@ func TestConfigCRUD(t *testing.T) {
 	}
 	if got.Endpoint != updated.Endpoint || got.Password != updated.Password || got.AuthToken != "" ||
 		got.LogLevel != updated.LogLevel || got.LogFormat != updated.LogFormat || got.LogOutput != updated.LogOutput || got.LogPath != updated.LogPath || got.SyncEnabled != updated.SyncEnabled ||
-		got.SyncIntervalMinutes != updated.SyncIntervalMinutes {
+		got.SyncIntervalMinutes != updated.SyncIntervalMinutes || got.DeleteRemoteNode != updated.DeleteRemoteNode {
 		t.Fatalf("GetConfig() after update = %+v, want fields matching %+v", got, updated)
 	}
 
@@ -409,5 +411,73 @@ func TestConfigTableMigrationAddsSyncIntervalColumn(t *testing.T) {
 	}
 	if got2.SyncIntervalMinutes != 30 {
 		t.Fatalf("GetConfig() after sync_interval_minutes update = %+v, want SyncIntervalMinutes=30", got2)
+	}
+}
+
+// TestConfigTableMigrationAddsDeleteRemoteNodeColumn mirrors
+// TestConfigTableMigrationAddsSyncIntervalColumn for the
+// delete_remote_node column: opening a database created before it existed
+// must transparently add it (defaulting to "", i.e. "use the built-in
+// default" - see ConfigRecord.DeleteRemoteNode) without touching the
+// pre-existing row, and the column must then be fully usable.
+func TestConfigTableMigrationAddsDeleteRemoteNodeColumn(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "legacy-delete-remote-node.db")
+
+	h0, err := NewSqliteHelper(dbPath)
+	if err != nil {
+		t.Fatalf("NewSqliteHelper() error = %v", err)
+	}
+	legacyCfg := ConfigRecord{
+		Endpoint:         "legacy.example.com",
+		Username:         "legacyuser",
+		Password:         "legacy-password",
+		FilesLocalFolder: "./files",
+	}
+	if err := h0.CreateConfig(legacyCfg); err != nil {
+		t.Fatalf("CreateConfig() error = %v", err)
+	}
+	if _, err := h0.DB.Exec(`ALTER TABLE config DROP COLUMN delete_remote_node`); err != nil {
+		t.Fatalf("dropping column delete_remote_node to simulate legacy schema failed: %v", err)
+	}
+	if err := h0.Close(); err != nil {
+		t.Fatalf("h0.Close() error = %v", err)
+	}
+
+	// Opening it again through SqliteHelper must migrate the table in place.
+	h, err := NewSqliteHelper(dbPath)
+	if err != nil {
+		t.Fatalf("NewSqliteHelper() on legacy db error = %v", err)
+	}
+	defer h.Close()
+
+	var deleteRemoteNode string
+	row := h.DB.QueryRow(`SELECT delete_remote_node FROM config WHERE id = 1`)
+	if err := row.Scan(&deleteRemoteNode); err != nil {
+		t.Fatalf("querying migrated delete_remote_node column failed: %v", err)
+	}
+	if deleteRemoteNode != "" {
+		t.Fatalf("migrated delete_remote_node column = %q, want \"\" (unset)", deleteRemoteNode)
+	}
+
+	// The pre-existing row must have survived the migration untouched.
+	got, err := h.GetConfig()
+	if err != nil {
+		t.Fatalf("GetConfig() after migration error = %v", err)
+	}
+	if got == nil || got.Endpoint != legacyCfg.Endpoint || got.DeleteRemoteNode != "" {
+		t.Fatalf("GetConfig() after migration = %+v, want legacy row preserved with DeleteRemoteNode=\"\"", got)
+	}
+
+	// The newly-added column must be fully usable going forward.
+	got.DeleteRemoteNode = "delete"
+	if err := h.UpdateConfig(*got); err != nil {
+		t.Fatalf("UpdateConfig() after migration error = %v", err)
+	}
+	got2, err := h.GetConfig()
+	if err != nil {
+		t.Fatalf("GetConfig() after delete_remote_node update error = %v", err)
+	}
+	if got2.DeleteRemoteNode != "delete" {
+		t.Fatalf("GetConfig() after delete_remote_node update = %+v, want DeleteRemoteNode=\"delete\"", got2)
 	}
 }

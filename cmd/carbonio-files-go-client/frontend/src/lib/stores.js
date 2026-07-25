@@ -20,11 +20,13 @@ export function freshSyncFolder() {
 }
 export const syncFolder = writable(freshSyncFolder());
 
-// ---------- Preferences: sync interval ----------
+// ---------- Preferences: sync interval + remote delete mode ----------
 // How often (in minutes) the background sync job re-checks the cache and
 // reconciles changes - one of 5, 15, 30 or 60 (see App.SetSyncIntervalMinutes).
+// deleteRemoteNode is "trash" or "delete" (see App.SetDeleteRemoteNode) and
+// controls how a locally-deleted item is propagated to the remote node.
 export function freshSyncInterval() {
-  return { loaded: false, loading: false, minutes: 5, busy: false, error: null, saved: false };
+  return { loaded: false, loading: false, minutes: 5, deleteRemoteNode: "trash", busy: false, error: null, saved: false };
 }
 export const syncInterval = writable(freshSyncInterval());
 

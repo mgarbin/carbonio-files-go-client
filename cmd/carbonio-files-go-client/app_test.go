@@ -860,6 +860,54 @@ func TestApp_SyncIntervalMinutesDefaultsValidatesAndPersists(t *testing.T) {
 	}
 }
 
+// TestApp_DeleteRemoteNodeDefaultsValidatesAndPersists covers the
+// Preferences > Synchronization "Modalità di eliminazione degli oggetti
+// remoti" dropdown's backend: the default before anything is saved,
+// rejection of values outside validDeleteRemoteNodeValues, the requirement
+// of a prior login (the preference lives in the same config row as the
+// credentials), and that a valid choice round-trips through
+// GetDeleteRemoteNode.
+func TestApp_DeleteRemoteNodeDefaultsValidatesAndPersists(t *testing.T) {
+	const user, pass = "user@example.com", "s3cret"
+	endpoint := newFakeCarbonioServer(t, user, pass)
+	dbPath := filepath.Join(t.TempDir(), "gui-config.db")
+
+	app := openTestApp(t, dbPath)
+	defer app.db.Close()
+
+	if got := app.GetDeleteRemoteNode(); got != defaultDeleteRemoteNode {
+		t.Fatalf("GetDeleteRemoteNode() before any config = %q, want default %q", got, defaultDeleteRemoteNode)
+	}
+
+	// Requires a prior login: no config row to store the preference in yet.
+	if err := app.SetDeleteRemoteNode("delete"); err == nil {
+		t.Fatalf("SetDeleteRemoteNode(\"delete\") before login = nil error, want an error")
+	}
+
+	if result := app.Login(endpoint, user, pass); !result.Success {
+		t.Fatalf("Login() = %+v, want Success=true", result)
+	}
+
+	// Only "trash" and "delete" are accepted.
+	for _, invalid := range []string{"", "purge", "TRASH", "Delete"} {
+		if err := app.SetDeleteRemoteNode(invalid); err == nil {
+			t.Fatalf("SetDeleteRemoteNode(%q) = nil error, want an error (not in %v)", invalid, validDeleteRemoteNodeValues)
+		}
+	}
+	if got := app.GetDeleteRemoteNode(); got != defaultDeleteRemoteNode {
+		t.Fatalf("GetDeleteRemoteNode() after only-rejected attempts = %q, want it to remain the default %q", got, defaultDeleteRemoteNode)
+	}
+
+	for _, valid := range validDeleteRemoteNodeValues {
+		if err := app.SetDeleteRemoteNode(valid); err != nil {
+			t.Fatalf("SetDeleteRemoteNode(%q) error = %v", valid, err)
+		}
+		if got := app.GetDeleteRemoteNode(); got != valid {
+			t.Fatalf("GetDeleteRemoteNode() after SetDeleteRemoteNode(%q) = %q, want %q", valid, got, valid)
+		}
+	}
+}
+
 // TestApp_SetSyncIntervalMinutesRestartsRunningJobWithoutImmediateCycle
 // verifies that changing the interval while the background job is running
 // (a) restarts it, so the new interval governs the next tick instead of

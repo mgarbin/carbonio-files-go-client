@@ -12,6 +12,9 @@ Main:
 #  AuthToken: "ZM_AUTH_TOKEN"    # Optional: pre-computed auth token (skips login)
 #  filesLocalFolder: "./files"   # Optional: by default it create the folder "files" where you are running carbonio-files-go-client
 
+Sync:
+#  deleteRemoteNode: "trash"  # "trash" (default) moves the remote node to trash, "delete" removes it permanently
+
 Logging:
 #  level: "info"      # trace, debug, info, warn, error, fatal, panic, disabled (default: info)
 #  format: "console"  # "console" (human-readable, colorized) or "json" (default: console)
@@ -33,3 +36,10 @@ token) the moment the server reports it no longer is.
 Every `Logging` field is optional and overridable from the command line (see
 [Logging](logging.md) below); the `Logging` block itself may be omitted entirely
 to use the built-in defaults (info level, console format, console output).
+
+`Sync.deleteRemoteNode` controls how `-liveCacheSync`/`-fullCacheSync`
+propagate a local deletion to the remote node: `"trash"` (the default, used
+when the `Sync` block or this field is omitted) moves it to trash,
+`"delete"` removes it permanently. The desktop GUI exposes the same choice
+from Preferences > Synchronization, persisted in the SQLite config instead
+(see [Configuration storage (SQLite)](configuration-storage-sqlite.md)).

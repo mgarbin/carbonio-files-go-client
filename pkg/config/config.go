@@ -8,6 +8,7 @@ import (
 
 type Config struct {
 	Main    MainConfig    `yaml:"Main"`
+	Sync    SyncConfig    `yaml:"Sync"`
 	Logging LoggingConfig `yaml:"Logging"`
 }
 
@@ -17,6 +18,16 @@ type MainConfig struct {
 	Password    string  `yaml:"password"`
 	AuthToken   *string `yaml:"authToken"`
 	FilesFolder string  `yaml:"filesLocalFolder"`
+}
+
+// SyncConfig configures behavior of the bidirectional sync actions
+// (actions.LiveCacheSync/FullCacheSync).
+type SyncConfig struct {
+	// DeleteRemoteNode controls how a local deletion is propagated to the
+	// remote node: "trash" (default) moves it to trash, "delete"
+	// permanently removes it. Empty (or any unrecognized value) falls
+	// back to "trash". See pkg/actions.DeleteModeTrash/DeleteModeDelete.
+	DeleteRemoteNode string `yaml:"deleteRemoteNode"`
 }
 
 // LoggingConfig configures the zerolog-backed logger (see pkg/logger).

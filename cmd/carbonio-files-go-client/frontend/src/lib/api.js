@@ -21,6 +21,8 @@ export const getSyncStatus = () => backend().GetSyncStatus();
 export const setSyncEnabled = (enabled) => backend().SetSyncEnabled(enabled);
 export const getSyncIntervalMinutes = () => backend().GetSyncIntervalMinutes();
 export const setSyncIntervalMinutes = (minutes) => backend().SetSyncIntervalMinutes(minutes);
+export const getDeleteRemoteNode = () => backend().GetDeleteRemoteNode();
+export const setDeleteRemoteNode = (mode) => backend().SetDeleteRemoteNode(mode);
 export const chooseLogFolder = (currentPath) => backend().ChooseLogFolder(currentPath);
 export const getLoggingConfig = () => backend().GetLoggingConfig();
 export const updateLoggingConfig = (level, format, output, path) =>
