@@ -105,10 +105,14 @@ func (s *Session) reauthenticate() (string, error) {
 			Password:  s.Password,
 			AuthToken: s.token,
 		}
-		// Preserve any previously saved logging settings, sync folder, and
-		// sync on/off decision: UpsertConfig replaces the whole singleton
-		// row, and refreshing the token should never silently reset them
-		// to defaults.
+		// Preserve any previously saved logging settings, sync folder, sync
+		// on/off decision, sync interval, and remote delete mode: UpsertConfig
+		// replaces the whole singleton row, and refreshing the token should
+		// never silently reset them to defaults (e.g. the dashboard's
+		// Preferences > Synchronization "Modalità di eliminazione degli
+		// oggetti remoti" dropdown reverting to "trash" every time the app is
+		// relaunched and re-authenticates because no valid cached token
+		// survived).
 		if existing, err := s.Store.GetConfig(); err == nil && existing != nil {
 			record.LogLevel = existing.LogLevel
 			record.LogFormat = existing.LogFormat
@@ -116,6 +120,8 @@ func (s *Session) reauthenticate() (string, error) {
 			record.LogPath = existing.LogPath
 			record.FilesLocalFolder = existing.FilesLocalFolder
 			record.SyncEnabled = existing.SyncEnabled
+			record.SyncIntervalMinutes = existing.SyncIntervalMinutes
+			record.DeleteRemoteNode = existing.DeleteRemoteNode
 		}
 		if err := s.Store.UpsertConfig(record); err != nil {
 			log.Error().Err(err).Str("username", s.Username).Msg("[auth] cannot persist refreshed auth token")

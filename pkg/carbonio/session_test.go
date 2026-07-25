@@ -158,6 +158,51 @@ func TestSession_LoginReauthenticatesWhenServerRejectsCachedToken(t *testing.T) 
 	}
 }
 
+// TestSession_LoginReauthenticatesPreservesSyncIntervalAndDeleteRemoteNode
+// reproduces closing and reopening the desktop GUI: no cached token
+// survives (mirrors LoginReauthenticatesWhenServerRejectsCachedToken), so
+// Login falls back to a fresh username/password login and reauthenticate
+// persists a new ConfigRecord. Before this test, that record only
+// preserved logging settings, the sync folder and the sync on/off
+// decision - the Preferences > Synchronization "sync interval" and
+// "remote delete mode" (trash vs. permanently delete) choices were
+// silently reset to their zero value, which the App layer then reports as
+// its built-in default ("trash") instead of the user's last saved choice.
+func TestSession_LoginReauthenticatesPreservesSyncIntervalAndDeleteRemoteNode(t *testing.T) {
+	const user, pass, oldToken, newToken = "user@example.com", "s3cret", "tok-expired", "tok-abc"
+	tokenValid := &atomic.Bool{}
+	tokenValid.Store(false) // the cached token is no longer suitable
+	endpoint, _ := newTokenTestServer(t, user, pass, newToken, tokenValid)
+	store := newTestStore(t)
+
+	if err := store.CreateConfig(sqlitecache.ConfigRecord{
+		Endpoint:            endpoint,
+		Username:            user,
+		Password:            pass,
+		AuthToken:           oldToken,
+		SyncIntervalMinutes: 60,
+		DeleteRemoteNode:    "delete",
+	}); err != nil {
+		t.Fatalf("CreateConfig() error = %v", err)
+	}
+
+	session := NewSession(&HTTPAuthenticator{Endpoint: endpoint}, store, user, pass)
+	if _, err := session.Login(); err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	cfg, err := store.GetConfig()
+	if err != nil || cfg == nil {
+		t.Fatalf("GetConfig() = (%v, %v), want a persisted record", cfg, err)
+	}
+	if cfg.SyncIntervalMinutes != 60 {
+		t.Fatalf("persisted SyncIntervalMinutes after reauthenticate = %d, want the preserved 60", cfg.SyncIntervalMinutes)
+	}
+	if cfg.DeleteRemoteNode != "delete" {
+		t.Fatalf("persisted DeleteRemoteNode after reauthenticate = %q, want the preserved %q", cfg.DeleteRemoteNode, "delete")
+	}
+}
+
 func TestSession_LoginFailsWithWrongPasswordAndDoesNotPersist(t *testing.T) {
 	const user, pass, token = "user@example.com", "s3cret", "tok-abc"
 	tokenValid := &atomic.Bool{}

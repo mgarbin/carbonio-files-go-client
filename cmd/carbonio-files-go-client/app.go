@@ -102,6 +102,17 @@ type App struct {
 	// until onTrayReady registers it (e.g. still nil in unit tests, which
 	// never build a tray) - every access is nil-checked.
 	trayOpenSyncFolder *systray.MenuItem
+
+	// configMu serializes every read-modify-write sequence against the
+	// singleton config row (GetConfig followed by UpdateConfig): each of
+	// UpdateLoggingConfig, SetSyncFolder, SetSyncEnabled, ResetSync,
+	// SetSyncIntervalMinutes and SetDeleteRemoteNode reads the full row,
+	// mutates one field and writes the whole row back, so two of them
+	// running concurrently (e.g. the Preferences > Synchronization panel
+	// saves SetSyncIntervalMinutes and SetDeleteRemoteNode together) can
+	// race: the second writer's stale read silently reverts the first
+	// writer's field. Acquire/release it only around such a sequence.
+	configMu sync.Mutex
 }
 
 // Session describes the currently authenticated user, if any. Token is
@@ -263,6 +274,8 @@ func (a *App) UpdateLoggingConfig(level, format, output, path string) error {
 	if a.db == nil {
 		return errors.New("credential store unavailable")
 	}
+	a.configMu.Lock()
+	defer a.configMu.Unlock()
 	cfg, err := a.db.GetConfig()
 	if err != nil {
 		return err
@@ -451,6 +464,8 @@ func (a *App) SetSyncFolder(path string) error {
 	if a.db == nil {
 		return errors.New("credential store unavailable")
 	}
+	a.configMu.Lock()
+	defer a.configMu.Unlock()
 	cfg, err := a.db.GetConfig()
 	if err != nil {
 		return err
@@ -628,6 +643,8 @@ func (a *App) SetSyncEnabled(enabled bool) error {
 	if a.db == nil {
 		return errors.New("credential store unavailable")
 	}
+	a.configMu.Lock()
+	defer a.configMu.Unlock()
 	cfg, err := a.db.GetConfig()
 	if err != nil {
 		return err
@@ -673,13 +690,20 @@ func (a *App) GetSyncEnabled() bool {
 func (a *App) ResetSync() error {
 	a.stopBackgroundSync()
 	if a.db != nil {
-		if cfg, err := a.db.GetConfig(); err != nil {
-			return err
-		} else if cfg != nil && cfg.SyncEnabled {
-			cfg.SyncEnabled = false
-			if err := a.db.UpdateConfig(*cfg); err != nil {
+		if err := func() error {
+			a.configMu.Lock()
+			defer a.configMu.Unlock()
+			cfg, err := a.db.GetConfig()
+			if err != nil {
 				return err
 			}
+			if cfg != nil && cfg.SyncEnabled {
+				cfg.SyncEnabled = false
+				return a.db.UpdateConfig(*cfg)
+			}
+			return nil
+		}(); err != nil {
+			return err
 		}
 	}
 
@@ -730,6 +754,8 @@ func (a *App) SetSyncIntervalMinutes(minutes int) error {
 	if a.db == nil {
 		return errors.New("credential store unavailable")
 	}
+	a.configMu.Lock()
+	defer a.configMu.Unlock()
 	cfg, err := a.db.GetConfig()
 	if err != nil {
 		return err
@@ -783,6 +809,8 @@ func (a *App) SetDeleteRemoteNode(mode string) error {
 	if a.db == nil {
 		return errors.New("credential store unavailable")
 	}
+	a.configMu.Lock()
+	defer a.configMu.Unlock()
 	cfg, err := a.db.GetConfig()
 	if err != nil {
 		return err

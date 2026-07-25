@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1035,6 +1036,64 @@ func TestApp_DeleteRemoteNodeDefaultsValidatesAndPersists(t *testing.T) {
 		if got := app.GetDeleteRemoteNode(); got != valid {
 			t.Fatalf("GetDeleteRemoteNode() after SetDeleteRemoteNode(%q) = %q, want %q", valid, got, valid)
 		}
+	}
+}
+
+// TestApp_ConcurrentSyncIntervalAndDeleteRemoteNodeSaveDoesNotLoseUpdates
+// reproduces the Preferences > Synchronization panel's Save button, which
+// fires SetSyncIntervalMinutes and SetDeleteRemoteNode concurrently (see
+// frontend SyncIntervalPanel.svelte's save(), Promise.all). Both persist
+// by reading the whole config row, mutating one field and writing the
+// whole row back; without configMu serializing that sequence, the second
+// writer's stale read silently reverts whichever field the first writer
+// just changed - the dropdown then no longer reflects the user's last
+// choice after a reload. Runs many concurrent save pairs and requires
+// every field to end up matching the last pair applied.
+func TestApp_ConcurrentSyncIntervalAndDeleteRemoteNodeSaveDoesNotLoseUpdates(t *testing.T) {
+	const user, pass = "user@example.com", "s3cret"
+	endpoint := newFakeCarbonioServer(t, user, pass)
+	dbPath := filepath.Join(t.TempDir(), "gui-config.db")
+
+	app := openTestApp(t, dbPath)
+	defer app.db.Close()
+
+	if result := app.Login(endpoint, user, pass); !result.Success {
+		t.Fatalf("Login() = %+v, want Success=true", result)
+	}
+
+	const rounds = 300
+	var lastMinutes int
+	var lastMode string
+	for i := range rounds {
+		minutes := validSyncIntervalsMinutes[i%len(validSyncIntervalsMinutes)]
+		mode := validDeleteRemoteNodeValues[i%len(validDeleteRemoteNodeValues)]
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		var minutesErr, modeErr error
+		go func() {
+			defer wg.Done()
+			minutesErr = app.SetSyncIntervalMinutes(minutes)
+		}()
+		go func() {
+			defer wg.Done()
+			modeErr = app.SetDeleteRemoteNode(mode)
+		}()
+		wg.Wait()
+		if minutesErr != nil {
+			t.Fatalf("round %d: SetSyncIntervalMinutes(%d) error = %v", i, minutes, minutesErr)
+		}
+		if modeErr != nil {
+			t.Fatalf("round %d: SetDeleteRemoteNode(%q) error = %v", i, mode, modeErr)
+		}
+		lastMinutes, lastMode = minutes, mode
+	}
+
+	if got := app.GetSyncIntervalMinutes(); got != lastMinutes {
+		t.Fatalf("GetSyncIntervalMinutes() after concurrent saves = %d, want last-applied %d (a concurrent SetDeleteRemoteNode reverted it)", got, lastMinutes)
+	}
+	if got := app.GetDeleteRemoteNode(); got != lastMode {
+		t.Fatalf("GetDeleteRemoteNode() after concurrent saves = %q, want last-applied %q (a concurrent SetSyncIntervalMinutes reverted it)", got, lastMode)
 	}
 }
 
