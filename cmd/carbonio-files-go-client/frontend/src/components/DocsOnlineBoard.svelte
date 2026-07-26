@@ -24,6 +24,11 @@
   let openingId = null;
   let openError = null;
 
+  // Case-insensitive filter box; resets to page 1 whenever it changes so
+  // paging never points past the end of a shorter filtered set.
+  let searchQuery = "";
+  let previousSearchQuery = "";
+
   onMount(loadIfNeeded);
 
   function loadIfNeeded() {
@@ -55,8 +60,39 @@
     page = 0;
   }
 
-  $: totalPages = currentFolder ? Math.max(1, Math.ceil(currentFolder.children.length / PAGE_SIZE)) : 1;
-  $: pageItems = currentFolder ? currentFolder.children.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE) : [];
+  $: if (searchQuery !== previousSearchQuery) {
+    previousSearchQuery = searchQuery;
+    page = 0;
+  }
+
+  // Recursively walks `node` and its subfolders, returning every file
+  // whose name matches `query` (case-insensitive) as a flat list - a
+  // match found several folders down still shows up while browsing a
+  // parent, without pulling any folder rows into the result.
+  function collectMatchingFiles(node, query) {
+    let matches = [];
+    for (const child of node.children) {
+      if (child.isFolder) {
+        matches = matches.concat(collectMatchingFiles(child, query));
+      } else if (child.name.toLowerCase().includes(query)) {
+        matches.push(child);
+      }
+    }
+    return matches;
+  }
+
+  // With no active query, show the folder as-is (files + folders). Once
+  // a query is typed, results become the flat list of matching files
+  // found anywhere under the current folder - folders are dropped
+  // entirely so the list only ever shows matched file names.
+  $: filteredChildren = currentFolder
+    ? searchQuery.trim()
+      ? collectMatchingFiles(currentFolder, searchQuery.trim().toLowerCase())
+      : currentFolder.children
+    : [];
+
+  $: totalPages = currentFolder ? Math.max(1, Math.ceil(filteredChildren.length / PAGE_SIZE)) : 1;
+  $: pageItems = filteredChildren.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
 
   function nextPage() {
     if (page < totalPages - 1) page += 1;
@@ -67,14 +103,17 @@
   }
 
   function openFolder(node) {
+    searchQuery = "";
     docsOnline.update((s) => ({ ...s, path: [...s.path, node] }));
   }
 
   function goToRoot() {
+    searchQuery = "";
     docsOnline.update((s) => ({ ...s, path: [] }));
   }
 
   function goToCrumb(index) {
+    searchQuery = "";
     docsOnline.update((s) => ({ ...s, path: s.path.slice(0, index + 1) }));
   }
 
@@ -131,6 +170,16 @@
     {/each}
   </nav>
 
+  <div class="mb-3">
+    <input
+      type="search"
+      class="w-full rounded border border-border bg-surface px-3 py-2.5 text-sm text-text focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/[0.15]"
+      placeholder={t("docsOnline.searchPlaceholder")}
+      aria-label={t("docsOnline.searchPlaceholder")}
+      bind:value={searchQuery}
+    />
+  </div>
+
   {#if openError}
     <Banner kind="error">{errorMessage(openError)}</Banner>
   {/if}
@@ -138,6 +187,8 @@
   <PanelCard maxWidth={false}>
     {#if currentFolder.children.length === 0}
       <p class="py-5 text-center text-sm text-muted">{t("docsOnline.emptyNote")}</p>
+    {:else if filteredChildren.length === 0}
+      <p class="py-5 text-center text-sm text-muted">{t("docsOnline.noResults")}</p>
     {:else}
       <ul class="divide-y divide-border">
         {#each pageItems as node (node.id)}

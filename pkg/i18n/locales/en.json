@@ -119,6 +119,8 @@
   "docsOnline.title": "Carbonio Docs Online",
   "docsOnline.description": "Browse your files on Carbonio and open, in Carbonio Docs Online, the documents you're allowed to edit.",
   "docsOnline.rootLabel": "My Files",
+  "docsOnline.searchPlaceholder": "Search files\u2026",
+  "docsOnline.noResults": "No files match your search.",
   "docsOnline.emptyNote": "No documents to show here. A file appears once it's synced, you can edit it, and its type is supported by Carbonio Docs Online.",
   "docsOnline.openButton": "Open in Docs Online",
   "docsOnline.opening": "Opening\u2026",

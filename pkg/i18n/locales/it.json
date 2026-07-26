@@ -119,6 +119,8 @@
   "docsOnline.title": "Carbonio Docs Online",
   "docsOnline.description": "Sfoglia i tuoi file su Carbonio e apri, in Carbonio Docs Online, i documenti che puoi modificare.",
   "docsOnline.rootLabel": "I miei file",
+  "docsOnline.searchPlaceholder": "Cerca file\u2026",
+  "docsOnline.noResults": "Nessun file corrisponde alla ricerca.",
   "docsOnline.emptyNote": "Nessun documento da mostrare qui. Un file compare quando \u00e8 stato sincronizzato, puoi modificarlo e il suo tipo \u00e8 supportato da Carbonio Docs Online.",
   "docsOnline.openButton": "Apri in Docs Online",
   "docsOnline.opening": "Apertura\u2026",
