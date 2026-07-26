@@ -7,6 +7,7 @@
 | [Khan/genqlient](https://github.com/Khan/genqlient) | GraphQL client code generation |
 | [andybalholm/brotli](https://github.com/andybalholm/brotli) | Brotli decompression |
 | [fsnotify/fsnotify](https://github.com/fsnotify/fsnotify) | File system event notifications |
+| [gen2brain/beeep](https://github.com/gen2brain/beeep) | Cross-platform desktop notifications (GUI mode) |
 | [golang.org/x/text](https://pkg.go.dev/golang.org/x/text) | Unicode text normalization |
 | [gopkg.in/yaml.v3](https://pkg.go.dev/gopkg.in/yaml.v3) | YAML configuration parsing |
 | [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite) | Pure-Go SQLite driver |

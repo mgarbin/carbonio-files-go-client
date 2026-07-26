@@ -132,5 +132,10 @@
   "theme.label": "Theme",
   "theme.light": "Light",
   "theme.dark": "Dark",
-  "theme.system": "System"
+  "theme.system": "System",
+  "notification.newFolder": "Created a new folder %s",
+  "notification.newFile": "Created a new file %s",
+  "notification.modifiedFile": "Modified file %s",
+  "notification.deletedFolder": "Deleted folder %s",
+  "notification.deletedFile": "Deleted file %s"
 }
