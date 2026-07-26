@@ -1,7 +1,7 @@
 <script>
   import { onDestroy } from "svelte";
 
-  // 'error' | 'success' | 'status'
+  // 'error' | 'success' | 'warning' | 'status'
   export let kind = "error";
 
   // Success banners (e.g. "settings saved") are transient confirmations,
@@ -33,6 +33,10 @@
     </div>
   {:else if kind === "success"}
     <div class="mb-4 rounded border border-success-border bg-success-bg px-3 py-2.5 text-sm text-success">
+      <slot />
+    </div>
+  {:else if kind === "warning"}
+    <div class="mb-4 rounded border border-warning-border bg-warning-bg px-3 py-2.5 text-sm text-warning">
       <slot />
     </div>
   {:else}

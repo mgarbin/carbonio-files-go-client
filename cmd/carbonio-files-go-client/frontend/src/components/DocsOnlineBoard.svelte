@@ -138,6 +138,7 @@
 
 <h2 class="mb-3 mt-0 text-xl font-semibold">{t("docsOnline.title")}</h2>
 <p class="mb-5 max-w-2xl text-sm text-muted">{t("docsOnline.description")}</p>
+<Banner kind="warning">{t("docsOnline.unsupportedWarning")}</Banner>
 
 {#if $docsOnline.loading && !$docsOnline.loaded}
   <Loader message={t("common.loading")} />
