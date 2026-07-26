@@ -16,10 +16,10 @@ The log file's parent directory is created automatically if it doesn't exist.
 
 ```bash
 # JSON logs written to a file, nothing on the console
-./carbonio-files-client -cli -getAllNode -logFormat json -logOutput file -logPath /var/log/carbonio-files-client.log
+./CarbonioFileSync -cli -getAllNode -logFormat json -logOutput file -logPath /var/log/CarbonioFileSync.log
 
 # Debug-level logs on both console and file
-./carbonio-files-client -cli -liveCacheSync -logLevel debug -logOutput both
+./CarbonioFileSync -cli -liveCacheSync -logLevel debug -logOutput both
 ```
 
 The [desktop GUI](desktop-gui.md) has no CLI flags; instead its logging settings

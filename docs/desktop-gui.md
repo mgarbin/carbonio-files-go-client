@@ -5,7 +5,7 @@
 Running the binary with **no arguments** opens the desktop GUI (built with [Wails](https://wails.io)):
 
 ```bash
-./carbonio-files-client
+./CarbonioFileSync
 ```
 
 - **Login**: enter the Carbonio **server**, **username**, and **password**. The UI language follows the OS locale (currently English and Italian ship out of the box, falling back to English).
