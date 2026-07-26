@@ -298,8 +298,22 @@ func updateCacheSync(endpoint, authToken, localFolder string) error {
 				trackedPaths[rec.LocalPath] = struct{}{}
 				if rec.LocalDeleted == 0 {
 					if _, exists := localMapItems[rec.LocalPath]; !exists {
-						updateFields["local_deleted"] = 1
-						log.Info().Str("path", rec.LocalPath).Msg("Local file deleted")
+						// localMapItems is keyed by the exact byte string
+						// ReadFolderRecursive produced for the current walk, so
+						// a lookup miss here only proves the path isn't a
+						// byte-exact match - not that it's actually gone from
+						// disk. On case-insensitive, case-preserving
+						// filesystems (Windows, default macOS) a path that
+						// merely changed case - which the OS treats as a
+						// no-op, not a deletion - produces exactly this kind
+						// of miss. Confirm via a live stat, which resolves
+						// the path the same way the OS does, before trusting
+						// it: this flag drives an irreversible remote
+						// trash/delete later in LiveCacheSync.
+						if _, statErr := os.Lstat(filepath.Join(localFolder, filepath.FromSlash(rec.LocalPath))); statErr != nil {
+							updateFields["local_deleted"] = 1
+							log.Info().Str("path", rec.LocalPath).Msg("Local file deleted")
+						}
 					}
 				}
 			}
@@ -940,6 +954,29 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 	})
 
 	for _, rec := range localDeleted {
+		// Re-verify right before an irreversible remote action. local_deleted
+		// was set by an earlier updateCacheSync scan (possibly a while ago:
+		// this loop runs last in LiveCacheSync, after every download/upload/
+		// out-of-sync step above has already spent time on the network), and
+		// - see updateCacheSync's matching os.Lstat fallback - the flag can
+		// also be wrong outright for a path that only ever appeared to
+		// disappear because of a byte-exact map-key mismatch (e.g. a
+		// case-only rename on Windows/macOS' case-insensitive, case-
+		// preserving filesystems). os.Lstat resolves the path the same way
+		// the OS itself does, so it isn't fooled by that mismatch. Acting on
+		// a stale/incorrect flag here trashes or permanently deletes a
+		// remote node whose local counterpart is actually still present, so
+		// this check is mandatory, not optional hardening.
+		if _, statErr := os.Lstat(filepath.Join(localFolder, filepath.FromSlash(rec.LocalPath))); statErr == nil {
+			log.Warn().Str("path", rec.LocalPath).Msg("Local item still present; clearing stale local_deleted flag instead of removing remote item")
+			if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
+				"local_deleted": 0,
+				"last_synced":   now,
+			}); updateErr != nil {
+				log.Warn().Err(updateErr).Str("path", rec.RemotePath).Msg("DB update failed")
+			}
+			continue
+		}
 		var opErr error
 		if resolvedDeleteMode == DeleteModeDelete {
 			_, opErr = graphqlAuthenticator.DeleteNodes([]string{rec.NodeID})
