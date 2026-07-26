@@ -591,17 +591,22 @@ func (a *App) StartFullSync() error {
 }
 
 // notifySyncSummary raises a single desktop notification for a sync run
-// that changed at least one document (see actions.SyncSummary) - covering
-// both StartFullSync (a manual "Avvia Sincronizzazione" run) and every
-// background sync cycle that found pending changes. Every changed
-// file/folder gets its own line in the notification body (e.g. "Created a
-// new folder Projects/Reports", "Modified file notes.txt") so a cycle that
-// touched several documents still raises exactly one OS notification,
-// never one per file. Localized the same way onTrayReady localizes the
-// tray menu: by loading the OS locale's catalog directly, since this can
-// run from a background goroutine with no access to the frontend's
-// already-loaded one. A no-op when nothing changed - a sync cycle that
-// found nothing to do gets no notification.
+// that pulled at least one document change from remote to local (see
+// actions.SyncSummary) - covering both StartFullSync (a manual "Avvia
+// Sincronizzazione" run) and every background sync cycle that found
+// pending changes. Changes pushed the other way - local edits uploaded to
+// remote - are real sync actions too, but SyncSummary never reports them
+// here: the user already knows about edits they just made locally, so
+// they don't need a desktop notification for them (see SyncSummary's doc
+// comment). Every remote-to-local change gets its own line in the
+// notification body (e.g. "Created a new folder Projects/Reports",
+// "Modified file notes.txt") so a cycle that pulled several documents
+// still raises exactly one OS notification, never one per file.
+// Localized the same way onTrayReady localizes the tray menu: by loading
+// the OS locale's catalog directly, since this can run from a background
+// goroutine with no access to the frontend's already-loaded one. A no-op
+// when nothing changed from remote - a sync cycle that found nothing to
+// pull (even if it pushed local changes to remote) gets no notification.
 func (a *App) notifySyncSummary(summary actions.SyncSummary) {
 	if !summary.HasChanges() {
 		return

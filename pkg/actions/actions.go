@@ -515,8 +515,8 @@ func updateCacheSync(endpoint, authToken, localFolder string) error {
 }
 
 // SyncChange describes one document a LiveCacheSync/FullCacheSync run
-// actually touched - the unit the GUI's desktop notification lists, one
-// line per change (see App.notifySyncSummary).
+// pulled from remote to local - the unit the GUI's desktop notification
+// lists, one line per change (see App.notifySyncSummary).
 type SyncChange struct {
 	// Path is the document's path relative to the sync folder (the same
 	// on both sides once synced - see the per-record "remote_path"/
@@ -528,17 +528,21 @@ type SyncChange struct {
 }
 
 // SyncSummary collects every document a LiveCacheSync/FullCacheSync run
-// actually changed, broken down the way the GUI's desktop notification
-// groups them: New covers items that only existed on one side and were
-// copied to the other (downloaded from remote_only or uploaded from
-// local_only), Modified covers out_of_sync files whose content genuinely
-// differed and were reconciled by timestamp (directories have no content
-// to modify, so they never appear here), and Deleted covers items removed
-// on one side because their counterpart was deleted on the other (both
-// directions). Housekeeping-only updates (e.g. flipping an out_of_sync
+// changed by pulling it from remote to local - the only direction the
+// GUI's desktop notification tracks (see notifySyncSummary): New covers
+// remote_only items downloaded to local, Modified covers out_of_sync
+// files where the remote version was newer and got downloaded
+// (directories have no content to modify, so they never appear here),
+// and Deleted covers local items removed because their remote
+// counterpart was deleted. The opposite direction - local_only items
+// uploaded to remote, out_of_sync files where the local version won, and
+// remote items removed because their local counterpart was deleted - are
+// real sync actions too, but never appear here: the user already knows
+// about edits they just made locally, so those don't need a desktop
+// notification. Housekeeping-only updates (e.g. flipping an out_of_sync
 // record back to synced without touching any file because its content
-// already matched) are not included - they produced no visible change for
-// the user.
+// already matched) are not included either - they produced no visible
+// change for the user.
 type SyncSummary struct {
 	New      []SyncChange
 	Modified []SyncChange
@@ -724,7 +728,6 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 				}); updateErr != nil {
 					log.Warn().Err(updateErr).Str("path", rec.LocalPath).Msg("DB update failed")
 				}
-				summary.New = append(summary.New, SyncChange{Path: rec.LocalPath, IsDirectory: true})
 			}
 		} else {
 			filePath := filepath.Join(localFolder, filepath.FromSlash(rec.LocalPath))
@@ -746,7 +749,6 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 			}); updateErr != nil {
 				log.Warn().Err(updateErr).Str("path", rec.LocalPath).Msg("DB update failed")
 			}
-			summary.New = append(summary.New, SyncChange{Path: rec.LocalPath, IsDirectory: false})
 		}
 	}
 
@@ -884,7 +886,6 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 			}); updateErr != nil {
 				log.Warn().Err(updateErr).Str("path", rec.LocalPath).Msg("DB update failed")
 			}
-			summary.Modified = append(summary.Modified, SyncChange{Path: rec.LocalPath, IsDirectory: false})
 		}
 	}
 
@@ -995,7 +996,6 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 		}); updateErr != nil {
 			log.Warn().Err(updateErr).Str("path", rec.RemotePath).Msg("DB update failed")
 		}
-		summary.Deleted = append(summary.Deleted, SyncChange{Path: rec.RemotePath, IsDirectory: rec.IsDirectory})
 	}
 
 	log.Info().Msg("liveCacheSync completed")
