@@ -31,6 +31,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/linux"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -112,6 +113,15 @@ func runGUI() {
 		HideWindowOnClose: true,
 		AssetServer: &assetserver.Options{
 			Assets: frontendFS,
+		},
+		// The Windows title-bar/taskbar icon comes from the .exe's own
+		// embedded resource (cmd/carbonio-files-go-client/rsrc_windows_amd64.syso,
+		// generated from img/icon.ico — see img/icon.go), which Wails reads
+		// automatically by resource ID; macOS has no window-titlebar icon and
+		// its Dock icon requires proper .app bundling, which this project does
+		// not do (raw binary builds only).
+		Linux: &linux.Options{
+			Icon: img.Icon,
 		},
 		OnStartup: app.startup,
 		OnShutdown: func(ctx context.Context) {
