@@ -10,9 +10,7 @@ name: Build
 
 on:
   push:
-    branches: [master]
     tags: ["v*"]
-  workflow_dispatch: {}
 
 concurrency:
   group: build-${{ github.ref }}
