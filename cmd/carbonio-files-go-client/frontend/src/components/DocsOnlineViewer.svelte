@@ -1,13 +1,31 @@
 <script>
   import { docsViewer } from "../lib/stores";
   import { t } from "../lib/i18n";
+  import * as api from "../lib/api";
 
   // Closes the embedded webview and returns to the Docs Online file
   // browser. The local proxy (see App.OpenNodeWithDocs) keeps running for
   // the rest of the session - it's cheap to leave up and lets reopening a
   // document skip straight back to loading its iframe.
+  //
+  // Also kicks off a full cache sync (UpdateCacheSync followed by
+  // LiveCacheSync - see App.StartFullSync/actions.FullCacheSync): the
+  // document may have just been edited in the embedded editor, so the
+  // local sync cache/folder need to catch up with whatever changed
+  // remotely. Checks GetSyncStatus first and skips straight past when a
+  // sync (manual or the periodic background job) is already running -
+  // App.StartFullSync would just reject it anyway (see tryBeginSync), so
+  // this only avoids a pointless call and its console noise. Still a
+  // fire-and-forget best effort: the button must stay instant, the
+  // dashboard's sync status panel is where progress/errors are surfaced,
+  // and remaining errors are only logged, never block returning to the
+  // file browser.
   function close() {
     docsViewer.set(null);
+    api
+      .getSyncStatus()
+      .then((status) => (status.inProgress ? null : api.startFullSync()))
+      .catch((err) => console.error(err));
   }
 </script>
 
