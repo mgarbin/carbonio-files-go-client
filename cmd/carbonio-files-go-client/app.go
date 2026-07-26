@@ -21,6 +21,7 @@ import (
 	"carbonio-files-go-client/pkg/carbonio"
 	"carbonio-files-go-client/pkg/i18n"
 	"carbonio-files-go-client/pkg/logger"
+	"carbonio-files-go-client/pkg/notify"
 	sqlitecache "carbonio-files-go-client/pkg/sqlite"
 
 	"github.com/mgarbin/systray"
@@ -581,7 +582,56 @@ func (a *App) StartFullSync() error {
 		return errors.New("a sync is already in progress")
 	}
 	defer a.endSync()
-	return actions.FullCacheSync(session.Endpoint, session.Token, folder.Path, a.auth, a.GetDeleteRemoteNode())
+	summary, err := actions.FullCacheSync(session.Endpoint, session.Token, folder.Path, a.auth, a.GetDeleteRemoteNode())
+	if err != nil {
+		return err
+	}
+	a.notifySyncSummary(summary)
+	return nil
+}
+
+// notifySyncSummary raises a single desktop notification for a sync run
+// that changed at least one document (see actions.SyncSummary) - covering
+// both StartFullSync (a manual "Avvia Sincronizzazione" run) and every
+// background sync cycle that found pending changes. Every changed
+// file/folder gets its own line in the notification body (e.g. "Created a
+// new folder Projects/Reports", "Modified file notes.txt") so a cycle that
+// touched several documents still raises exactly one OS notification,
+// never one per file. Localized the same way onTrayReady localizes the
+// tray menu: by loading the OS locale's catalog directly, since this can
+// run from a background goroutine with no access to the frontend's
+// already-loaded one. A no-op when nothing changed - a sync cycle that
+// found nothing to do gets no notification.
+func (a *App) notifySyncSummary(summary actions.SyncSummary) {
+	if !summary.HasChanges() {
+		return
+	}
+	_, catalog := i18n.DetectAndLoad()
+	tr := func(key, fallback string) string {
+		if v, ok := catalog[key]; ok && v != "" {
+			return v
+		}
+		return fallback
+	}
+	lines := make([]string, 0, len(summary.New)+len(summary.Modified)+len(summary.Deleted))
+	for _, c := range summary.New {
+		if c.IsDirectory {
+			lines = append(lines, fmt.Sprintf(tr("notification.newFolder", "Created a new folder %s"), c.Path))
+		} else {
+			lines = append(lines, fmt.Sprintf(tr("notification.newFile", "Created a new file %s"), c.Path))
+		}
+	}
+	for _, c := range summary.Modified {
+		lines = append(lines, fmt.Sprintf(tr("notification.modifiedFile", "Modified file %s"), c.Path))
+	}
+	for _, c := range summary.Deleted {
+		if c.IsDirectory {
+			lines = append(lines, fmt.Sprintf(tr("notification.deletedFolder", "Deleted folder %s"), c.Path))
+		} else {
+			lines = append(lines, fmt.Sprintf(tr("notification.deletedFile", "Deleted file %s"), c.Path))
+		}
+	}
+	notify.SyncChange(tr("app.title", "Carbonio Files Sync"), strings.Join(lines, "\n"))
 }
 
 // tryBeginSync attempts to acquire exclusive access for a sync operation:
@@ -946,9 +996,12 @@ func (a *App) runBackgroundSyncCycle() {
 	}
 
 	log.Info().Int("pending", pending).Msg("Background sync: changes detected, running liveCacheSync")
-	if err := actions.LiveCacheSync(endpoint, token, folder.Path, a.auth, a.GetDeleteRemoteNode()); err != nil {
+	summary, err := actions.LiveCacheSync(endpoint, token, folder.Path, a.auth, a.GetDeleteRemoteNode())
+	if err != nil {
 		log.Error().Err(err).Msg("Background sync: liveCacheSync failed")
+		return
 	}
+	a.notifySyncSummary(summary)
 }
 
 // pendingSyncChanges returns how many filesync cache records still need

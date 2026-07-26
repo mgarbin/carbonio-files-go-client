@@ -132,5 +132,10 @@
   "theme.label": "Tema",
   "theme.light": "Chiaro",
   "theme.dark": "Scuro",
-  "theme.system": "Sistema"
+  "theme.system": "Sistema",
+  "notification.newFolder": "Creata una nuova cartella %s",
+  "notification.newFile": "Creato un nuovo file %s",
+  "notification.modifiedFile": "Modificato il file %s",
+  "notification.deletedFolder": "Eliminata la cartella %s",
+  "notification.deletedFile": "Eliminato il file %s"
 }

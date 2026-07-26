@@ -322,13 +322,13 @@ func runCLI() {
 	}
 
 	if *liveCacheSync {
-		if err := actions.LiveCacheSync(cfg.Main.Endpoint, zmAuthToken, localFolder, carbonioAuth, cfg.Sync.DeleteRemoteNode); err != nil {
+		if _, err := actions.LiveCacheSync(cfg.Main.Endpoint, zmAuthToken, localFolder, carbonioAuth, cfg.Sync.DeleteRemoteNode); err != nil {
 			return
 		}
 	}
 
 	if *fullCacheSync {
-		if err := actions.FullCacheSync(cfg.Main.Endpoint, zmAuthToken, localFolder, carbonioAuth, cfg.Sync.DeleteRemoteNode); err != nil {
+		if _, err := actions.FullCacheSync(cfg.Main.Endpoint, zmAuthToken, localFolder, carbonioAuth, cfg.Sync.DeleteRemoteNode); err != nil {
 			return
 		}
 	}

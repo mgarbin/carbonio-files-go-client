@@ -500,6 +500,43 @@ func updateCacheSync(endpoint, authToken, localFolder string) error {
 	return nil
 }
 
+// SyncChange describes one document a LiveCacheSync/FullCacheSync run
+// actually touched - the unit the GUI's desktop notification lists, one
+// line per change (see App.notifySyncSummary).
+type SyncChange struct {
+	// Path is the document's path relative to the sync folder (the same
+	// on both sides once synced - see the per-record "remote_path"/
+	// "local_path" bookkeeping below).
+	Path string
+	// IsDirectory distinguishes "folder" from "file" in the notification
+	// text (e.g. "Created a new folder" vs "Created a new file").
+	IsDirectory bool
+}
+
+// SyncSummary collects every document a LiveCacheSync/FullCacheSync run
+// actually changed, broken down the way the GUI's desktop notification
+// groups them: New covers items that only existed on one side and were
+// copied to the other (downloaded from remote_only or uploaded from
+// local_only), Modified covers out_of_sync files whose content genuinely
+// differed and were reconciled by timestamp (directories have no content
+// to modify, so they never appear here), and Deleted covers items removed
+// on one side because their counterpart was deleted on the other (both
+// directions). Housekeeping-only updates (e.g. flipping an out_of_sync
+// record back to synced without touching any file because its content
+// already matched) are not included - they produced no visible change for
+// the user.
+type SyncSummary struct {
+	New      []SyncChange
+	Modified []SyncChange
+	Deleted  []SyncChange
+}
+
+// HasChanges reports whether the summary contains any counted change,
+// i.e. whether a desktop notification is warranted.
+func (s SyncSummary) HasChanges() bool {
+	return len(s.New) > 0 || len(s.Modified) > 0 || len(s.Deleted) > 0
+}
+
 // LiveCacheSync reconciles localFolder and the remote tree using the sqlite
 // sync cache: it downloads remote-only items, uploads local-only items,
 // resolves out-of-sync items by timestamp, and propagates deletions in both
@@ -509,13 +546,14 @@ func updateCacheSync(endpoint, authToken, localFolder string) error {
 // removes it; any other value falls back to DeleteModeTrash (see
 // resolveDeleteMode). A non-nil error means the caller should abort, the
 // message has already been printed.
-func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbonio.HTTPAuthenticator, deleteRemoteNode string) error {
+func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbonio.HTTPAuthenticator, deleteRemoteNode string) (SyncSummary, error) {
+	summary := SyncSummary{}
 
 	// Open the existing SQLite cache database
 	cacheDb, err := sqlitecache.NewSqliteHelper(appdir.Path("file_sync_cache.db"))
 	if err != nil {
 		log.Error().Err(err).Msg("Opening cache failed")
-		return err
+		return SyncSummary{}, err
 	}
 	defer cacheDb.Close()
 
@@ -525,7 +563,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 	allRecords, err := cacheDb.QueryAll()
 	if err != nil {
 		log.Error().Err(err).Msg("Querying cache failed")
-		return err
+		return SyncSummary{}, err
 	}
 	pathToNodeID := make(map[string]string)
 	for _, rec := range allRecords {
@@ -541,7 +579,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 	remoteOnly, err := cacheDb.QueryBySyncStatus("remote_only")
 	if err != nil {
 		log.Error().Err(err).Msg("Querying remote_only failed")
-		return err
+		return SyncSummary{}, err
 	}
 	log.Info().Int("count", len(remoteOnly)).Msg("Found remote_only items to download")
 
@@ -569,6 +607,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 			}); updateErr != nil {
 				log.Warn().Err(updateErr).Str("path", rec.RemotePath).Msg("DB update failed")
 			}
+			summary.New = append(summary.New, SyncChange{Path: rec.RemotePath, IsDirectory: true})
 		} else {
 			dirPart := path.Dir(rec.RemotePath)
 			fileName := path.Base(rec.RemotePath)
@@ -602,6 +641,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 			}); updateErr != nil {
 				log.Warn().Err(updateErr).Str("path", rec.RemotePath).Msg("DB update failed")
 			}
+			summary.New = append(summary.New, SyncChange{Path: rec.RemotePath, IsDirectory: false})
 		}
 	}
 
@@ -609,7 +649,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 	localOnly, err := cacheDb.QueryBySyncStatus("local_only")
 	if err != nil {
 		log.Error().Err(err).Msg("Querying local_only failed")
-		return err
+		return SyncSummary{}, err
 	}
 	log.Info().Int("count", len(localOnly)).Msg("Found local_only items to upload")
 
@@ -670,6 +710,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 				}); updateErr != nil {
 					log.Warn().Err(updateErr).Str("path", rec.LocalPath).Msg("DB update failed")
 				}
+				summary.New = append(summary.New, SyncChange{Path: rec.LocalPath, IsDirectory: true})
 			}
 		} else {
 			filePath := filepath.Join(localFolder, filepath.FromSlash(rec.LocalPath))
@@ -691,6 +732,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 			}); updateErr != nil {
 				log.Warn().Err(updateErr).Str("path", rec.LocalPath).Msg("DB update failed")
 			}
+			summary.New = append(summary.New, SyncChange{Path: rec.LocalPath, IsDirectory: false})
 		}
 	}
 
@@ -698,7 +740,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 	outOfSync, err := cacheDb.QueryBySyncStatus("out_of_sync")
 	if err != nil {
 		log.Error().Err(err).Msg("Querying out_of_sync failed")
-		return err
+		return SyncSummary{}, err
 	}
 	log.Info().Int("count", len(outOfSync)).Msg("Found out_of_sync items to process")
 
@@ -791,6 +833,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 			}); updateErr != nil {
 				log.Warn().Err(updateErr).Str("path", rec.RemotePath).Msg("DB update failed")
 			}
+			summary.Modified = append(summary.Modified, SyncChange{Path: rec.RemotePath, IsDirectory: false})
 		} else {
 			// Local is more recent: upload a new version to remote.
 			log.Info().Str("path", rec.LocalPath).Msg("Local version is more recent; uploading update")
@@ -827,6 +870,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 			}); updateErr != nil {
 				log.Warn().Err(updateErr).Str("path", rec.LocalPath).Msg("DB update failed")
 			}
+			summary.Modified = append(summary.Modified, SyncChange{Path: rec.LocalPath, IsDirectory: false})
 		}
 	}
 
@@ -834,7 +878,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 	remoteDeleted, err := cacheDb.QueryRemoteDeleted()
 	if err != nil {
 		log.Error().Err(err).Msg("Querying remote deleted failed")
-		return err
+		return SyncSummary{}, err
 	}
 	log.Info().Int("count", len(remoteDeleted)).Msg("Found remote deleted items to clean up locally")
 
@@ -872,6 +916,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 		}); updateErr != nil {
 			log.Warn().Err(updateErr).Str("path", rec.LocalPath).Msg("DB update failed")
 		}
+		summary.Deleted = append(summary.Deleted, SyncChange{Path: rec.LocalPath, IsDirectory: rec.IsDirectory})
 	}
 
 	// --- Trash or permanently delete remote items whose local counterpart
@@ -880,7 +925,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 	localDeleted, err := cacheDb.QueryLocalDeleted()
 	if err != nil {
 		log.Error().Err(err).Msg("Querying local deleted failed")
-		return err
+		return SyncSummary{}, err
 	}
 	log.Info().Int("count", len(localDeleted)).Str("deleteRemoteNode", resolvedDeleteMode).Msg("Found locally deleted items to remove from remote")
 
@@ -913,10 +958,11 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 		}); updateErr != nil {
 			log.Warn().Err(updateErr).Str("path", rec.RemotePath).Msg("DB update failed")
 		}
+		summary.Deleted = append(summary.Deleted, SyncChange{Path: rec.RemotePath, IsDirectory: rec.IsDirectory})
 	}
 
 	log.Info().Msg("liveCacheSync completed")
-	return nil
+	return summary, nil
 }
 
 // FullCacheSync runs UpdateCacheSync followed by LiveCacheSync against
@@ -926,15 +972,16 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 // is forwarded to LiveCacheSync verbatim - see its doc comment. A non-nil
 // error means the caller should abort, the message has already been
 // printed.
-func FullCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbonio.HTTPAuthenticator, deleteRemoteNode string) error {
+func FullCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbonio.HTTPAuthenticator, deleteRemoteNode string) (SyncSummary, error) {
 	if err := UpdateCacheSync(endpoint, authToken, localFolder); err != nil {
-		return err
+		return SyncSummary{}, err
 	}
 
-	if err := LiveCacheSync(endpoint, authToken, localFolder, carbonioAuth, deleteRemoteNode); err != nil {
-		return err
+	summary, err := LiveCacheSync(endpoint, authToken, localFolder, carbonioAuth, deleteRemoteNode)
+	if err != nil {
+		return SyncSummary{}, err
 	}
 
 	log.Info().Msg("fullCacheSync completed")
-	return nil
+	return summary, nil
 }
