@@ -1,0 +1,61 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Semantic color tokens as RGB triplets (no `rgb()` wrapper) so Tailwind's
+ * `rgb(var(--x) / <alpha-value>)` opacity syntax works (see
+ * tailwind.config.js). This is the whole theme: swapping the values below
+ * per class is the entire mechanism for adding/switching a theme - no
+ * component ever hardcodes a color. */
+:root {
+  color-scheme: light;
+  --color-brand: 43 108 176; /* #2b6cb0 */
+  --color-brand-dark: 30 78 140; /* #1e4e8c */
+  --color-bg: 244 246 248; /* #f4f6f8 */
+  --color-surface: 255 255 255; /* #ffffff */
+  --color-border: 224 228 232; /* #e0e4e8 */
+  --color-text: 26 32 44; /* #1a202c */
+  --color-muted: 100 116 139; /* #64748b */
+  --color-danger: 192 57 43; /* #c0392b */
+  --color-danger-bg: 253 236 234; /* #fdecea */
+  --color-danger-border: 245 198 203; /* #f5c6cb */
+  --color-success: 31 138 76; /* #1f8a4c */
+  --color-success-bg: 234 250 241; /* #eafaf1 */
+  --color-success-border: 183 228 199; /* #b7e4c7 */
+  --color-warning: 156 97 6; /* #9c6104 */
+  --color-warning-bg: 255 244 224; /* #fff4e0 */
+  --color-warning-border: 250 220 158; /* #fadc9e */
+  --radius: 0.5rem;
+}
+
+.dark {
+  color-scheme: dark;
+  --color-brand: 96 165 250; /* #60a5fa */
+  --color-brand-dark: 147 197 253; /* #93c5fd */
+  --color-bg: 15 23 42; /* #0f172a */
+  --color-surface: 30 41 59; /* #1e293b */
+  --color-border: 51 65 85; /* #334155 */
+  --color-text: 226 232 240; /* #e2e8f0 */
+  --color-muted: 148 163 184; /* #94a3b8 */
+  --color-danger: 248 113 113; /* #f87171 */
+  --color-danger-bg: 69 26 26; /* #451a1a */
+  --color-danger-border: 127 29 29; /* #7f1d1d */
+  --color-success: 74 222 128; /* #4ade80 */
+  --color-success-bg: 20 51 33; /* #143321 */
+  --color-success-border: 22 101 52; /* #166534 */
+  --color-warning: 251 191 36; /* #fbbf24 */
+  --color-warning-bg: 66 47 8; /* #422f08 */
+  --color-warning-border: 120 84 15; /* #78540f */
+}
+
+@layer base {
+  html,
+  body,
+  #app {
+    height: 100%;
+  }
+
+  body {
+    @apply m-0 bg-bg font-sans text-text;
+  }
+}

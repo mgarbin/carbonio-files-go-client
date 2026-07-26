@@ -4,9 +4,10 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 type API interface {
@@ -18,11 +19,13 @@ type GraphQLAuthenticator struct {
 	AuthToken string
 }
 
-// customTransport adds the Cookie header to every request
+// customTransport adds the Cookie header to every request. TLS/dialer
+// settings live on base (see newAuthenticatedClient), never on this
+// struct - a field here would be silently ignored, since RoundTrip only
+// ever delegates to base.
 type customTransport struct {
-	base            http.RoundTripper
-	TLSClientConfig *tls.Config
-	authToken       string
+	base      http.RoundTripper
+	authToken string
 }
 
 func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -31,16 +34,23 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.base.RoundTrip(req)
 }
 
-func (a *GraphQLAuthenticator) GetAllNode(nodeID string, sort string, pageToken *string, sharesLimit *int) ([]*Node, error) {
-	// Optionally, set up an authenticated HTTP client
-	httpClient := &http.Client{
+// newAuthenticatedClient builds an http.Client that authenticates every
+// request via the ZM_AUTH_TOKEN cookie and talks to the Carbonio server
+// over TLS without verifying its certificate (Carbonio servers commonly
+// use a self-signed certificate; see docs/notes.md).
+func newAuthenticatedClient(authToken string) *http.Client {
+	return &http.Client{
 		Timeout: 10 * time.Second,
 		Transport: &customTransport{
-			base:            http.DefaultTransport,
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			authToken:       a.AuthToken,
+			base:      &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+			authToken: authToken,
 		},
 	}
+}
+
+func (a *GraphQLAuthenticator) GetAllNode(nodeID string, sort string, pageToken *string, sharesLimit *int) ([]*Node, error) {
+	// Optionally, set up an authenticated HTTP client
+	httpClient := newAuthenticatedClient(a.AuthToken)
 
 	client := NewClient("https://"+a.Endpoint+"/services/files/graphql", httpClient)
 
@@ -58,19 +68,16 @@ func (a *GraphQLAuthenticator) GetAllNode(nodeID string, sort string, pageToken 
 	)
 
 	if err != nil {
-		log.Fatalf("GraphQL query failed: %v", err)
+		log.Error().Err(err).Msg("GraphQL query failed")
 		return nil, err
 	}
 
-	// Print the results
 	if resp.GetNode == nil {
-		//fmt.Println("No node found")
 		return nil, nil
 	}
 
 	var children []*Node
 
-	//fmt.Printf("Node: %s, Name: %s\n", resp.GetNode.ID, resp.GetNode.Name)
 	if resp.GetNode.Children != nil {
 
 		if resp.GetNode.Children.PageToken != nil {
@@ -83,10 +90,6 @@ func (a *GraphQLAuthenticator) GetAllNode(nodeID string, sort string, pageToken 
 		}
 
 		return resp.GetNode.Children.Nodes, nil
-		/*fmt.Println("Children:")
-		for _, child := range resp.GetNode.Children.Nodes {
-			fmt.Printf("- Child Node: %s (%s)\n", child.ID, child.Name)
-		}*/
 	}
 
 	return nil, nil
@@ -94,14 +97,7 @@ func (a *GraphQLAuthenticator) GetAllNode(nodeID string, sort string, pageToken 
 
 func (a *GraphQLAuthenticator) CreateFolder(parentId string, folderName string) (*Folder, error) {
 	// Optionally, set up an authenticated HTTP client
-	httpClient := &http.Client{
-		Timeout: 10 * time.Second,
-		Transport: &customTransport{
-			base:            http.DefaultTransport,
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			authToken:       a.AuthToken,
-		},
-	}
+	httpClient := newAuthenticatedClient(a.AuthToken)
 
 	client := NewClient("https://"+a.Endpoint+"/services/files/graphql", httpClient)
 
@@ -117,7 +113,7 @@ func (a *GraphQLAuthenticator) CreateFolder(parentId string, folderName string) 
 	)
 
 	if err != nil {
-		log.Fatalf("GraphQL query failed: %v", err)
+		log.Error().Err(err).Msg("GraphQL query failed")
 		return nil, err
 	}
 
@@ -131,14 +127,7 @@ func (a *GraphQLAuthenticator) CreateFolder(parentId string, folderName string) 
 
 func (a *GraphQLAuthenticator) MoveNodes(nodeIds []string, targetParentId string) ([]string, error) {
 	// Optionally, set up an authenticated HTTP client
-	httpClient := &http.Client{
-		Timeout: 10 * time.Second,
-		Transport: &customTransport{
-			base:            http.DefaultTransport,
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			authToken:       a.AuthToken,
-		},
-	}
+	httpClient := newAuthenticatedClient(a.AuthToken)
 
 	client := NewClient("https://"+a.Endpoint+"/services/files/graphql", httpClient)
 
@@ -150,7 +139,7 @@ func (a *GraphQLAuthenticator) MoveNodes(nodeIds []string, targetParentId string
 	)
 
 	if err != nil {
-		log.Fatalf("GraphQL query failed: %v", err)
+		log.Error().Err(err).Msg("GraphQL query failed")
 		return nil, err
 	}
 
@@ -164,14 +153,7 @@ func (a *GraphQLAuthenticator) MoveNodes(nodeIds []string, targetParentId string
 
 func (a *GraphQLAuthenticator) TrashNodes(nodeIds []string) ([]string, error) {
 	// Optionally, set up an authenticated HTTP client
-	httpClient := &http.Client{
-		Timeout: 10 * time.Second,
-		Transport: &customTransport{
-			base:            http.DefaultTransport,
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			authToken:       a.AuthToken,
-		},
-	}
+	httpClient := newAuthenticatedClient(a.AuthToken)
 
 	client := NewClient("https://"+a.Endpoint+"/services/files/graphql", httpClient)
 
@@ -182,7 +164,7 @@ func (a *GraphQLAuthenticator) TrashNodes(nodeIds []string) ([]string, error) {
 	)
 
 	if err != nil {
-		log.Fatalf("GraphQL query failed: %v", err)
+		log.Error().Err(err).Msg("GraphQL query failed")
 		return nil, err
 	}
 
@@ -196,14 +178,7 @@ func (a *GraphQLAuthenticator) TrashNodes(nodeIds []string) ([]string, error) {
 
 func (a *GraphQLAuthenticator) DeleteNodes(nodeIds []string) ([]string, error) {
 	// Optionally, set up an authenticated HTTP client
-	httpClient := &http.Client{
-		Timeout: 10 * time.Second,
-		Transport: &customTransport{
-			base:            http.DefaultTransport,
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			authToken:       a.AuthToken,
-		},
-	}
+	httpClient := newAuthenticatedClient(a.AuthToken)
 
 	client := NewClient("https://"+a.Endpoint+"/services/files/graphql", httpClient)
 
@@ -214,7 +189,7 @@ func (a *GraphQLAuthenticator) DeleteNodes(nodeIds []string) ([]string, error) {
 	)
 
 	if err != nil {
-		log.Fatalf("GraphQL query failed: %v", err)
+		log.Error().Err(err).Msg("GraphQL query failed")
 		return nil, err
 	}
 

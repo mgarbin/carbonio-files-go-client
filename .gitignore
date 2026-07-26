@@ -1,3 +1,10 @@
-/carbonio-files-client
+/CarbonioFileSync
 /config.yaml
 /files
+*.db
+*.db.key
+node_modules/
+cmd/carbonio-files-go-client/frontend/.vite/
+cmd/carbonio-files-go-client/frontend/node_modules
+cmd/carbonio-files-go-client/carbonio-files-go-client
+cmd/carbonio-files-go-client/frontend/dist

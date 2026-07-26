@@ -40,6 +40,16 @@ type ItemInfo struct {
 	Digest          string  // file digest (only for files)
 	ModifyTimestamp int64   // Unix timestamp (only for files)
 	DeleteTimestamp int64   // Unix timestamp (only for files, 0 if not deleted)
+	// CanWriteFile, CanAddVersion and CanDelete mirror the remote node's
+	// permissions.can_write_file / can_add_version / can_delete GraphQL
+	// fields. They are only populated for remote items; local filesystem
+	// entries leave them at the zero value (false).
+	CanWriteFile  bool
+	CanAddVersion bool
+	CanDelete     bool
+	// MimeType mirrors the remote node's mime_type GraphQL field (files
+	// only; folders have no MIME type). Only populated for remote items.
+	MimeType string
 }
 
 func Sha384Base64(filePath string) (string, error) {

@@ -1,0 +1,126 @@
+name: Build
+
+# Cross-platform release builds for carbonio-files-go-client.
+#
+# This is a Wails v2 desktop app with cgo-based GUI backends per OS
+# (webkit2gtk on Linux, Cocoa/WebKit on macOS) plus a syscall-based
+# WebView2 frontend on Windows (no cgo there). GUI cgo cannot be
+# cross-compiled reliably, so every target below builds natively on a
+# runner of its own OS/arch instead of cross-compiling from one host.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch: {}
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            ext: ""
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            ext: ""
+          - name: windows-amd64
+            os: windows-latest
+            goos: windows
+            goarch: amd64
+            ext: ".exe"
+          - name: macos-amd64
+            os: macos-15-intel
+            goos: darwin
+            goarch: amd64
+            ext: ""
+          - name: macos-arm64
+            os: macos-15
+            goos: darwin
+            goarch: arm64
+            ext: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: cmd/carbonio-files-go-client/frontend/package-lock.json
+
+      - name: Install Linux GUI toolchain (GTK3 + WebKit2GTK 4.1)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
+
+      - name: Build frontend
+        working-directory: cmd/carbonio-files-go-client/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build binary (Linux)
+        if: runner.os == 'Linux'
+        env:
+          CGO_ENABLED: "1"
+          CGO_CFLAGS: -Wno-deprecated-declarations
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          go build -tags "webkit2_41,production" -ldflags="-s -w" \
+            -o "dist/CarbonioFileSync-${{ matrix.name }}${{ matrix.ext }}" \
+            ./cmd/carbonio-files-go-client
+
+      - name: Build binary (macOS)
+        if: runner.os == 'macOS'
+        env:
+          CGO_ENABLED: "1"
+          CGO_CFLAGS: -Wno-deprecated-declarations
+          CGO_LDFLAGS: -framework UniformTypeIdentifiers
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          go build -tags "webkit2_41,production" -ldflags="-s -w" \
+            -o "dist/CarbonioFileSync-${{ matrix.name }}${{ matrix.ext }}" \
+            ./cmd/carbonio-files-go-client
+
+      - name: Build binary (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          go build -tags "production" -ldflags="-s -w -H=windowsgui" \
+            -o "dist/CarbonioFileSync-${{ matrix.name }}${{ matrix.ext }}" \
+            ./cmd/carbonio-files-go-client
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarbonioFileSync-${{ matrix.name }}
+          path: dist/CarbonioFileSync-${{ matrix.name }}${{ matrix.ext }}
+          if-no-files-found: error
+          retention-days: 14
