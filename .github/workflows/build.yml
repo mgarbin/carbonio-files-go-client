@@ -11,6 +11,7 @@ name: Build
 on:
   push:
     branches: [master]
+    tags: ["v*"]
   workflow_dispatch: {}
 
 concurrency:
@@ -124,3 +125,25 @@ jobs:
           path: dist/CarbonioFileSync-${{ matrix.name }}${{ matrix.ext }}
           if-no-files-found: error
           retention-days: 14
+
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create release with binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            dist/*/CarbonioFileSync-* \
+            --title "${{ github.ref_name }}" \
+            --generate-notes
