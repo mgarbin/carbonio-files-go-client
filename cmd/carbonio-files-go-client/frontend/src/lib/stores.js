@@ -4,7 +4,7 @@ import { writable } from "svelte/store";
 export const booting = writable(true);
 export const translations = writable({});
 export const view = writable("login"); // 'login' | 'sync-setup' | 'dashboard'
-export const section = writable("dashboard"); // 'dashboard' | 'authentication' | 'syncFolder' | 'syncInterval' | 'logging'
+export const section = writable("dashboard"); // 'dashboard' | 'docsOnline' | 'authentication' | 'syncFolder' | 'syncInterval' | 'logging'
 export const session = writable(null); // { endpoint, username } | null
 
 // ---------- Login screen ----------
@@ -46,6 +46,23 @@ export function freshLogging() {
 }
 export const logging = writable(freshLogging());
 
+// ---------- Docs Online browser ----------
+// tree is the root DocsOnlineNode (see App.GetDocsOnlineTree), containing
+// the whole filtered remote folder/file tree - fetched once per session
+// and navigated client-side from there. path is the list of folder nodes
+// (root excluded) currently drilled into, driving the breadcrumb.
+export function freshDocsOnline() {
+  return { loaded: false, loading: false, tree: null, path: [], error: null };
+}
+export const docsOnline = writable(freshDocsOnline());
+
+// docsViewer holds the embedded webview state while a Docs Online
+// document is open: { nodeId, name, url } (url points at the local
+// DocsProxy - see App.OpenNodeWithDocs), or null when no viewer is open.
+// DashboardShell renders DocsOnlineViewer as a full takeover whenever
+// this is non-null.
+export const docsViewer = writable(null);
+
 // resetSessionState restores every per-session store to its pristine state.
 // Called on logout so the next login starts clean.
 export function resetSessionState() {
@@ -55,5 +72,6 @@ export function resetSessionState() {
   loginError.set(null);
   syncFolder.set(freshSyncFolder());
   syncInterval.set(freshSyncInterval());
-  logging.set(freshLogging());
+  docsOnline.set(freshDocsOnline());
+  docsViewer.set(null);
 }

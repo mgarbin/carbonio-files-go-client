@@ -22,10 +22,18 @@
 <div class="flex w-60 flex-shrink-0 flex-col border-r border-border bg-surface p-3">
   <button
     type="button"
-    class="mb-1 block w-full rounded px-2.5 py-2.5 text-left text-base font-bold transition-colors {$section === 'dashboard' ? 'bg-brand/[0.2]' : 'bg-brand/[0.12] hover:bg-brand/[0.2]'}"
+    class="mb-1 block w-full rounded px-2.5 py-2.5 text-left text-base font-bold transition-colors {$section === 'dashboard' ? 'bg-brand/[0.12] text-brand-dark' : 'text-text hover:bg-bg'}"
     on:click={() => go("dashboard")}
   >
     {t("menu.dashboard")}
+  </button>
+
+  <button
+    type="button"
+    class="mb-1 block w-full rounded px-2.5 py-2.5 text-left text-base font-bold transition-colors {$section === 'docsOnline' ? 'bg-brand/[0.12] text-brand-dark' : 'text-text hover:bg-bg'}"
+    on:click={() => go("docsOnline")}
+  >
+    {t("menu.docsOnline")}
   </button>
 
   <div class="px-2.5 pb-1 pt-3.5 text-[11px] font-bold uppercase tracking-wide text-muted">{t("menu.preferences")}</div>

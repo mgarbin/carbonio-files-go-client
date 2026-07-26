@@ -7,8 +7,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -55,6 +57,12 @@ type App struct {
 	ctx  context.Context
 	db   *sqlitecache.SqliteHelper
 	auth *carbonio.HTTPAuthenticator
+
+	// docsProxy is the local reverse proxy OpenNodeWithDocs points the
+	// embedded webview at - see carbonio.DocsProxy's doc comment for why
+	// a proxy, rather than a real cookie in the webview's own jar,
+	// authenticates it (Wails v2 has no cookie-manager API).
+	docsProxy *carbonio.DocsProxy
 
 	// sessionMu guards session: the background sync goroutine reads it
 	// concurrently with login/logout requests mutating it. Access only via
@@ -149,7 +157,7 @@ type InitialState struct {
 // NewApp constructs the App backend. Call startup once the Wails runtime is
 // ready before binding it.
 func NewApp() *App {
-	return &App{auth: &carbonio.HTTPAuthenticator{}}
+	return &App{auth: &carbonio.HTTPAuthenticator{}, docsProxy: carbonio.NewDocsProxy()}
 }
 
 // guiDefaultOutput is the Output the desktop GUI falls back to when
@@ -203,6 +211,7 @@ func (a *App) startup(ctx context.Context) {
 // so it doesn't outlive the process.
 func (a *App) shutdown(ctx context.Context) {
 	a.stopBackgroundSync()
+	a.docsProxy.Stop()
 	if a.logCloser != nil {
 		a.logCloser.Close()
 	}
@@ -1034,6 +1043,237 @@ func (a *App) GetSyncStatus() (SyncStatus, error) {
 	status.LocalItems = local
 
 	return status, nil
+}
+
+// docsOnlineHandledMimeTypes mirrors carbonio-files-ui's
+// docsHandledMimeTypes (src/carbonio-files-ui-common/utils/utils.ts) - the
+// file mime types the Carbonio Docs Online editor is able to open.
+// GetDocsOnlineTree only ever surfaces files whose mime type is in this
+// set.
+var docsOnlineHandledMimeTypes = map[string]struct{}{
+	"text/rtf":                      {},
+	"text/plain":                    {},
+	"application/msword":            {},
+	"application/rtf":               {},
+	"application/vnd.lotus-wordpro": {},
+	"application/vnd.ms-excel":      {},
+	"application/vnd.ms-excel.sheet.binary.macroEnabled.12":                     {},
+	"application/vnd.ms-excel.sheet.macroEnabled.12":                            {},
+	"application/vnd.ms-excel.template.macroEnabled.12":                         {},
+	"application/vnd.ms-powerpoint":                                             {},
+	"application/vnd.ms-powerpoint.presentation.macroEnabled.12":                {},
+	"application/vnd.ms-powerpoint.template.macroEnabled.12":                    {},
+	"application/vnd.ms-word.document.macroEnabled.12":                          {},
+	"application/vnd.ms-word.template.macroEnabled.12":                          {},
+	"application/vnd.oasis.opendocument.presentation":                           {},
+	"application/vnd.oasis.opendocument.presentation-flat-xml":                  {},
+	"application/vnd.oasis.opendocument.spreadsheet":                            {},
+	"application/vnd.oasis.opendocument.text":                                   {},
+	"application/vnd.oasis.opendocument.text-flat-xml":                          {},
+	"application/vnd.oasis.opendocument.text-master":                            {},
+	"application/vnd.oasis.opendocument.text-master-template":                   {},
+	"application/vnd.oasis.opendocument.text-template":                          {},
+	"application/vnd.oasis.opendocument.text-web":                               {},
+	"application/vnd.openxmlformats-officedocument.presentationml.presentation": {},
+	"application/vnd.openxmlformats-officedocument.presentationml.template":     {},
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":         {},
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.template":      {},
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.document":   {},
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.template":   {},
+	"application/vnd.sun.xml.calc":                                              {},
+	"application/vnd.sun.xml.calc.template":                                     {},
+	"application/vnd.sun.xml.impress":                                           {},
+	"application/vnd.sun.xml.impress.template":                                  {},
+	"application/vnd.sun.xml.writer":                                            {},
+	"application/vnd.sun.xml.writer.global":                                     {},
+	"application/vnd.sun.xml.writer.template":                                   {},
+}
+
+// DocsOnlineNode is one entry in the virtual remote file/folder tree
+// exposed to the frontend by GetDocsOnlineTree.
+type DocsOnlineNode struct {
+	ID       string            `json:"id"`
+	Name     string            `json:"name"`
+	IsFolder bool              `json:"isFolder"`
+	MimeType string            `json:"mimeType,omitempty"`
+	Children []*DocsOnlineNode `json:"children"`
+}
+
+// GetDocsOnlineTree builds the virtual remote file/folder tree shown by the
+// dashboard's "Carbonio Docs Online" section entirely from the local sync
+// cache (the filesync table in file_sync_cache.db, populated by the last
+// UpdateCacheSync/LiveCacheSync run) - it never talks to the server, per
+// the same "already cached, no graphql query needed" reasoning as
+// pendingSyncChanges/GetSyncStatus above. Folders are always included, so
+// the tree stays navigable to any depth; a file is included only when
+// both hold: the signed-in user can modify it
+// (permissions.can_write_file, cached as FileSyncRecord.CanWriteFile) and
+// its mime type is one Carbonio Docs Online can open
+// (docsOnlineHandledMimeTypes). Records the last sync found deleted on the
+// remote, or never synced to the remote at all (local-only), are
+// excluded. Returns a lone childless root node if the cache hasn't been
+// populated yet.
+func (a *App) GetDocsOnlineTree() (*DocsOnlineNode, error) {
+	root := &DocsOnlineNode{ID: "LOCAL_ROOT", IsFolder: true, Children: []*DocsOnlineNode{}}
+
+	dbPath := appdir.Path("file_sync_cache.db")
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		return root, nil
+	}
+	cacheDb, err := sqlitecache.NewSqliteHelper(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	defer cacheDb.Close()
+
+	records, err := cacheDb.QueryAll()
+	if err != nil {
+		return nil, err
+	}
+
+	// First pass: register every still-synced folder, keyed by its remote
+	// path, so files can be attached to their parent below regardless of
+	// scan order.
+	folders := map[string]*DocsOnlineNode{"": root}
+	for _, rec := range records {
+		if !rec.IsDirectory || rec.NodeID == "" || rec.RemotePath == "" || rec.RemoteDeleted != 0 {
+			continue
+		}
+		folders[rec.RemotePath] = &DocsOnlineNode{
+			ID:       rec.NodeID,
+			Name:     path.Base(rec.RemotePath),
+			IsFolder: true,
+			Children: []*DocsOnlineNode{},
+		}
+	}
+
+	// Second pass: link every folder under its parent, shallowest first,
+	// so a parent node always exists by the time its children look it up.
+	folderPaths := make([]string, 0, len(folders))
+	for p := range folders {
+		if p != "" {
+			folderPaths = append(folderPaths, p)
+		}
+	}
+	sort.Slice(folderPaths, func(i, j int) bool {
+		return strings.Count(folderPaths[i], "/") < strings.Count(folderPaths[j], "/")
+	})
+	for _, p := range folderPaths {
+		parent := root
+		if parentPath := path.Dir(p); parentPath != "." {
+			if pn, ok := folders[parentPath]; ok {
+				parent = pn
+			}
+		}
+		parent.Children = append(parent.Children, folders[p])
+	}
+
+	// Third pass: attach every file the user may modify and Docs Online
+	// can open to its parent folder (root if the parent isn't a tracked
+	// folder, e.g. a top-level file).
+	for _, rec := range records {
+		if rec.IsDirectory || rec.NodeID == "" || rec.RemotePath == "" || rec.RemoteDeleted != 0 {
+			continue
+		}
+		if !rec.CanWriteFile {
+			continue
+		}
+		if _, handled := docsOnlineHandledMimeTypes[rec.MimeType]; !handled {
+			continue
+		}
+		parent := root
+		if parentPath := path.Dir(rec.RemotePath); parentPath != "." {
+			if pn, ok := folders[parentPath]; ok {
+				parent = pn
+			}
+		}
+		parent.Children = append(parent.Children, &DocsOnlineNode{
+			ID:       rec.NodeID,
+			Name:     path.Base(rec.RemotePath),
+			IsFolder: false,
+			MimeType: rec.MimeType,
+		})
+	}
+
+	// Fourth pass: drop folders that end up with nothing to show - neither
+	// a qualifying file directly inside them nor, recursively, anywhere
+	// in a subfolder - so the tree only ever leads somewhere.
+	pruneEmptyFolders(root)
+	sortDocsOnlineChildren(root)
+	return root, nil
+}
+
+// pruneEmptyFolders recursively drops n's subfolders that end up with no
+// content - a leaf with no qualifying files anywhere below it - keeping
+// every file child as-is (only qualifying files are ever attached to the
+// tree in the first place, see GetDocsOnlineTree). It reports whether n
+// itself still has anything to show, so a folder several levels up finds
+// out its descendant is now empty and drops it too. n's root call result
+// is intentionally ignored: an empty root simply renders as "nothing to
+// show" rather than disappearing.
+func pruneEmptyFolders(n *DocsOnlineNode) bool {
+	kept := n.Children[:0]
+	for _, c := range n.Children {
+		if c.IsFolder && !pruneEmptyFolders(c) {
+			continue
+		}
+		kept = append(kept, c)
+	}
+	n.Children = kept
+	return len(n.Children) > 0
+}
+
+// sortDocsOnlineChildren orders a node's children folders-first, then
+// alphabetically (case-insensitive) within each group, recursing into
+// every folder.
+func sortDocsOnlineChildren(n *DocsOnlineNode) {
+	sort.Slice(n.Children, func(i, j int) bool {
+		x, y := n.Children[i], n.Children[j]
+		if x.IsFolder != y.IsFolder {
+			return x.IsFolder
+		}
+		return strings.ToLower(x.Name) < strings.ToLower(y.Name)
+	})
+	for _, c := range n.Children {
+		if c.IsFolder {
+			sortDocsOnlineChildren(c)
+		}
+	}
+}
+
+// OpenNodeWithDocs returns the URL the frontend should point its embedded
+// <iframe> at to open nodeId in Carbonio Docs Online. Wails v2 has no
+// cookie-manager API (see carbonio.DocsProxy's doc comment), so the
+// webview can't be handed a real https://<endpoint>/... link with a
+// ZM_AUTH_TOKEN cookie of its own; instead this starts (if not already
+// running) a local reverse proxy authenticated with the current
+// session's token and asks it to resolve nodeId's real editor URL (see
+// carbonio.DocsProxy.ResolveOpenURL - GET /services/docs/files/open/
+// <nodeId> answers with JSON, not a redirect, so the iframe can't be
+// pointed at it directly), rewritten to the proxy's own local base URL.
+// The proxy then transparently forwards everything the editor itself
+// loads from there (assets, API calls, the collaborative WebSocket
+// connection) - cookie included. Backs the "Open" action on files listed
+// by GetDocsOnlineTree; requires a prior successful login.
+func (a *App) OpenNodeWithDocs(nodeId string) (string, error) {
+	session := a.currentSession()
+	if !session.LoggedIn {
+		return "", errors.New("log in first")
+	}
+	a.docsProxy.SetCredentials(session.Endpoint, session.Token)
+	baseURL, err := a.docsProxy.Start()
+	if err != nil {
+		log.Error().Err(err).Str("nodeId", nodeId).Str("endpoint", session.Endpoint).
+			Msg("[gui] failed to start docs proxy")
+		return "", err
+	}
+	localURL, err := a.docsProxy.ResolveOpenURL(nodeId)
+	if err != nil {
+		log.Error().Err(err).Str("nodeId", nodeId).Str("endpoint", session.Endpoint).Str("proxyBase", baseURL).
+			Msg("[gui] failed to resolve Docs Online open URL")
+		return "", err
+	}
+	return localURL, nil
 }
 
 // configDBPath returns the per-user path of the GUI's encrypted credential

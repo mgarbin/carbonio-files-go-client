@@ -29,3 +29,5 @@ export const getLoggingConfig = () => backend().GetLoggingConfig();
 export const updateLoggingConfig = (level, format, output, path) =>
   backend().UpdateLoggingConfig(level, format, output, path);
 export const openLogFile = (path) => backend().OpenLogFile(path);
+export const getDocsOnlineTree = () => backend().GetDocsOnlineTree();
+export const openNodeWithDocs = (nodeId) => backend().OpenNodeWithDocs(nodeId);

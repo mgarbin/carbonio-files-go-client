@@ -789,6 +789,7 @@ func TestApp_ResetSyncStopsAndClearsCache(t *testing.T) {
 		"node-1", "parent-1", "/remote/a.txt", "rhash", "/local/a.txt", "lhash",
 		false, "2024-01-01T00:00:00Z", "2024-01-01T00:00:00Z", 10, 10,
 		"rdigest", "ldigest", "in_sync", "2024-01-01T00:00:00Z", 0, 0,
+		false, false, false, "",
 	); err != nil {
 		t.Fatalf("InsertFileSync() error = %v", err)
 	}
@@ -1153,4 +1154,199 @@ func TestApp_SetSyncIntervalMinutesRestartsRunningJobWithoutImmediateCycle(t *te
 		t.Fatalf("SetSyncIntervalMinutes() left the sync lock held - restarting the job must not run an immediate cycle")
 	}
 	app.syncMu.Unlock()
+}
+
+// TestApp_GetDocsOnlineTreeReturnsEmptyRootBeforeFirstSync covers the
+// "cache not populated yet" path: no file_sync_cache.db exists, so
+// GetDocsOnlineTree must return a lone childless root instead of an error.
+func TestApp_GetDocsOnlineTreeReturnsEmptyRootBeforeFirstSync(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	app := &App{auth: &carbonio.HTTPAuthenticator{}}
+
+	root, err := app.GetDocsOnlineTree()
+	if err != nil {
+		t.Fatalf("GetDocsOnlineTree() error = %v", err)
+	}
+	if root == nil || root.ID != "LOCAL_ROOT" || !root.IsFolder {
+		t.Fatalf("GetDocsOnlineTree() root = %+v, want empty LOCAL_ROOT folder", root)
+	}
+	if len(root.Children) != 0 {
+		t.Fatalf("GetDocsOnlineTree() root.Children = %v, want none before any sync ran", root.Children)
+	}
+}
+
+// TestApp_GetDocsOnlineTreeFiltersByPermissionAndMimeType covers
+// GetDocsOnlineTree's filtering/tree-building rules against a populated
+// filesync cache: folders always show (for navigation), a file shows only
+// when it is both writable and a mime type Docs Online can open, and
+// remote-deleted/local-only records are excluded regardless.
+func TestApp_GetDocsOnlineTreeFiltersByPermissionAndMimeType(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	app := &App{auth: &carbonio.HTTPAuthenticator{}}
+
+	cacheDb, err := sqlitecache.NewSqliteHelper(appdir.Path("file_sync_cache.db"))
+	if err != nil {
+		t.Fatalf("NewSqliteHelper() error = %v", err)
+	}
+	defer cacheDb.Close()
+
+	const docxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	const odtMime = "application/vnd.oasis.opendocument.text"
+
+	type row struct {
+		nodeID, remotePath string
+		isDirectory        bool
+		canWriteFile       bool
+		remoteDeleted      int
+		mimeType           string
+	}
+	rows := []row{
+		{nodeID: "folder-docs", remotePath: "Docs", isDirectory: true},
+		{nodeID: "folder-sub", remotePath: "Docs/Sub", isDirectory: true},
+		{nodeID: "file-report", remotePath: "Docs/report.docx", canWriteFile: true, mimeType: docxMime},
+		{nodeID: "file-readonly", remotePath: "Docs/readonly.docx", canWriteFile: false, mimeType: docxMime},
+		{nodeID: "file-image", remotePath: "Docs/image.png", canWriteFile: true, mimeType: "image/png"},
+		{nodeID: "file-nested", remotePath: "Docs/Sub/nested.odt", canWriteFile: true, mimeType: odtMime},
+		{nodeID: "file-deleted", remotePath: "deleted.docx", canWriteFile: true, mimeType: docxMime, remoteDeleted: 1},
+		{nodeID: "", remotePath: "local-only.docx", canWriteFile: true, mimeType: docxMime},
+		{nodeID: "file-root", remotePath: "root.txt", canWriteFile: true, mimeType: "text/plain"},
+	}
+	for _, r := range rows {
+		if _, err := cacheDb.InsertFileSync(
+			r.nodeID, "", r.remotePath, "", "", "",
+			r.isDirectory,
+			"", "", 0, 0, "", "", "synced", "",
+			0, r.remoteDeleted,
+			r.canWriteFile, false, false,
+			r.mimeType,
+		); err != nil {
+			t.Fatalf("InsertFileSync(%q) error = %v", r.remotePath, err)
+		}
+	}
+
+	root, err := app.GetDocsOnlineTree()
+	if err != nil {
+		t.Fatalf("GetDocsOnlineTree() error = %v", err)
+	}
+
+	names := func(n *DocsOnlineNode) []string {
+		out := make([]string, len(n.Children))
+		for i, c := range n.Children {
+			out[i] = c.Name
+		}
+		return out
+	}
+
+	if got, want := names(root), []string{"Docs", "root.txt"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("root children = %v, want %v (folders first, deleted/local-only/unwritable/unsupported-mime excluded)", got, want)
+	}
+
+	var docs *DocsOnlineNode
+	for _, c := range root.Children {
+		if c.Name == "Docs" {
+			docs = c
+		}
+	}
+	if docs == nil || !docs.IsFolder || docs.ID != "folder-docs" {
+		t.Fatalf("root.Docs = %+v, want folder node folder-docs", docs)
+	}
+	if got, want := names(docs), []string{"Sub", "report.docx"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Docs children = %v, want %v (readonly.docx and image.png must be filtered out)", got, want)
+	}
+
+	var sub *DocsOnlineNode
+	for _, c := range docs.Children {
+		if c.Name == "Sub" {
+			sub = c
+		}
+	}
+	if sub == nil || !sub.IsFolder || sub.ID != "folder-sub" {
+		t.Fatalf("Docs.Sub = %+v, want folder node folder-sub", sub)
+	}
+	if got, want := names(sub), []string{"nested.odt"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Sub children = %v, want %v", got, want)
+	}
+	if sub.Children[0].ID != "file-nested" || sub.Children[0].MimeType != odtMime || sub.Children[0].IsFolder {
+		t.Fatalf("Sub.nested.odt = %+v, want file node file-nested with mime %s", sub.Children[0], odtMime)
+	}
+}
+
+// TestApp_GetDocsOnlineTreeHidesFoldersWithNoModifiableFile covers
+// pruneEmptyFolders: a folder is dropped unless a qualifying file (see
+// TestApp_GetDocsOnlineTreeFiltersByPermissionAndMimeType) sits somewhere
+// under it, however deep - and a folder is kept, all the way up to the
+// root, when the qualifying file is several levels down with no
+// qualifying file at any intermediate level.
+func TestApp_GetDocsOnlineTreeHidesFoldersWithNoModifiableFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	app := &App{auth: &carbonio.HTTPAuthenticator{}}
+
+	cacheDb, err := sqlitecache.NewSqliteHelper(appdir.Path("file_sync_cache.db"))
+	if err != nil {
+		t.Fatalf("NewSqliteHelper() error = %v", err)
+	}
+	defer cacheDb.Close()
+
+	const docxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+	type row struct {
+		nodeID, remotePath string
+		isDirectory        bool
+		canWriteFile       bool
+		mimeType           string
+	}
+	rows := []row{
+		{nodeID: "folder-empty", remotePath: "Empty", isDirectory: true},
+		{nodeID: "folder-readonly", remotePath: "OnlyReadonly", isDirectory: true},
+		{nodeID: "file-ro", remotePath: "OnlyReadonly/ro.docx", canWriteFile: false, mimeType: docxMime},
+		{nodeID: "folder-badmime", remotePath: "OnlyUnsupportedMime", isDirectory: true},
+		{nodeID: "file-badmime", remotePath: "OnlyUnsupportedMime/image.png", canWriteFile: true, mimeType: "image/png"},
+		{nodeID: "folder-deep", remotePath: "Deep", isDirectory: true},
+		{nodeID: "folder-mid", remotePath: "Deep/Mid", isDirectory: true},
+		{nodeID: "folder-leaf", remotePath: "Deep/Mid/Leaf", isDirectory: true},
+		{nodeID: "file-deep", remotePath: "Deep/Mid/Leaf/doc.docx", canWriteFile: true, mimeType: docxMime},
+		{nodeID: "file-top", remotePath: "top.txt", canWriteFile: true, mimeType: "text/plain"},
+	}
+	for _, r := range rows {
+		if _, err := cacheDb.InsertFileSync(
+			r.nodeID, "", r.remotePath, "", "", "",
+			r.isDirectory,
+			"", "", 0, 0, "", "", "synced", "",
+			0, 0,
+			r.canWriteFile, false, false,
+			r.mimeType,
+		); err != nil {
+			t.Fatalf("InsertFileSync(%q) error = %v", r.remotePath, err)
+		}
+	}
+
+	root, err := app.GetDocsOnlineTree()
+	if err != nil {
+		t.Fatalf("GetDocsOnlineTree() error = %v", err)
+	}
+
+	names := func(n *DocsOnlineNode) []string {
+		out := make([]string, len(n.Children))
+		for i, c := range n.Children {
+			out[i] = c.Name
+		}
+		return out
+	}
+
+	if got, want := names(root), []string{"Deep", "top.txt"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("root children = %v, want %v (Empty/OnlyReadonly/OnlyUnsupportedMime must be hidden)", got, want)
+	}
+
+	deep := root.Children[0]
+	if got, want := names(deep), []string{"Mid"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Deep children = %v, want %v", got, want)
+	}
+	mid := deep.Children[0]
+	if got, want := names(mid), []string{"Leaf"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Deep.Mid children = %v, want %v", got, want)
+	}
+	leaf := mid.Children[0]
+	if got, want := names(leaf), []string{"doc.docx"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Deep.Mid.Leaf children = %v, want %v", got, want)
+	}
 }

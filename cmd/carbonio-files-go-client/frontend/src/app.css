@@ -22,6 +22,9 @@
   --color-success: 31 138 76; /* #1f8a4c */
   --color-success-bg: 234 250 241; /* #eafaf1 */
   --color-success-border: 183 228 199; /* #b7e4c7 */
+  --color-warning: 156 97 6; /* #9c6104 */
+  --color-warning-bg: 255 244 224; /* #fff4e0 */
+  --color-warning-border: 250 220 158; /* #fadc9e */
   --radius: 0.5rem;
 }
 
@@ -40,6 +43,9 @@
   --color-success: 74 222 128; /* #4ade80 */
   --color-success-bg: 20 51 33; /* #143321 */
   --color-success-border: 22 101 52; /* #166534 */
+  --color-warning: 251 191 36; /* #fbbf24 */
+  --color-warning-bg: 66 47 8; /* #422f08 */
+  --color-warning-border: 120 84 15; /* #78540f */
 }
 
 @layer base {

@@ -33,6 +33,11 @@ export default {
           bg: withOpacity("--color-success-bg"),
           border: withOpacity("--color-success-border"),
         },
+        warning: {
+          DEFAULT: withOpacity("--color-warning"),
+          bg: withOpacity("--color-warning-bg"),
+          border: withOpacity("--color-warning-border"),
+        },
       },
       borderRadius: {
         DEFAULT: "var(--radius)",

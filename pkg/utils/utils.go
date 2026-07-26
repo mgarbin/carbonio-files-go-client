@@ -28,6 +28,11 @@ func RecursiveListNodeItems(graphqlAuthenticator *graphql.GraphQLAuthenticator, 
 	for _, child := range nodes {
 
 		item := localfs.ItemInfo{}
+		if child.Permissions != nil {
+			item.CanWriteFile = child.Permissions.CanWriteFile
+			item.CanAddVersion = child.Permissions.CanAddVersion
+			item.CanDelete = child.Permissions.CanDelete
+		}
 		currentFilePath := ""
 
 		if child.Type == "FOLDER" {
@@ -52,6 +57,9 @@ func RecursiveListNodeItems(graphqlAuthenticator *graphql.GraphQLAuthenticator, 
 			item.Size = *child.Size
 			item.ModifyTimestamp = *child.UpdatedAt
 			item.FileVersion = *child.Version
+			if child.MimeType != nil {
+				item.MimeType = *child.MimeType
+			}
 			fileName := child.Name
 			if child.Extension != nil {
 				fileName = child.Name + "." + *child.Extension
