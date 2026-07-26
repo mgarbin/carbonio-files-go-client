@@ -85,6 +85,15 @@ func ReadFolderRecursive(root string, showHidden bool) (map[string]ItemInfo, err
 		if relPath == "." {
 			return nil
 		}
+		// Use '/' as the map-key separator on every platform so local paths
+		// line up with remote paths (always built with "/", see
+		// utils.RecursiveListNodeItems) and with previously persisted DB
+		// rows. filepath.Rel returns OS-native separators, i.e. '\' on
+		// Windows; left unconverted, every nested item gets a local key
+		// that never matches its remote counterpart, so each sync run
+		// re-detects already-synced nested files as brand-new local-only
+		// items and re-uploads them.
+		relPath = filepath.ToSlash(relPath)
 
 		// Skip hidden files/directories if showHidden is false
 		// A file or directory is considered hidden if its name starts with a dot ('.').
