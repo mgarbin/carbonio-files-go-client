@@ -112,7 +112,7 @@ WailsContext.m:182:18: warning: 'setShowsBaselineSeparator:' is deprecated: firs
 ### Cause
 
 This is a **warning, not an error** — `go build` still completes and emits the
-`carbonio-files-client` binary. The call lives in Wails' own vendored
+`CarbonioFileSync` binary. The call lives in Wails' own vendored
 Objective-C (`WailsContext.m`, `wails/v2@v2.13.0`), not in this repository.
 `NSToolbar setShowsBaselineSeparator:` was soft-deprecated in macOS 15 but
 remains functional; the macOS 26 SDK simply started flagging it via
@@ -128,7 +128,7 @@ directly, silence it the same way:
 ```bash
 CGO_CFLAGS="$CGO_CFLAGS -Wno-deprecated-declarations" \
   go build -tags "webkit2_41,production" -ldflags="-s -w" \
-  -o carbonio-files-client ./cmd/carbonio-files-go-client
+  -o CarbonioFileSync ./cmd/carbonio-files-go-client
 ```
 
 The fix belongs upstream in Wails; nothing in this repository can be changed to

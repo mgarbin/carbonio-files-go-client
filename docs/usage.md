@@ -3,7 +3,7 @@
 ## Usage
 
 ```
-./carbonio-files-client -cli -[FLAG] [OPTIONS]
+./CarbonioFileSync -cli -[FLAG] [OPTIONS]
 ```
 
 Every flag below requires the top-level `-cli` flag: it is what unlocks the command-line interface. Running the binary with any other flag but without `-cli` is rejected; running it with no arguments at all opens the GUI instead (see [Desktop GUI](desktop-gui.md)).
@@ -13,7 +13,7 @@ Every flag below requires the top-level `-cli` flag: it is what unlocks the comm
 Print all available flags:
 
 ```bash
-./carbonio-files-client -cli -v
+./CarbonioFileSync -cli -v
 ```
 
 ### List all remote nodes
@@ -21,7 +21,7 @@ Print all available flags:
 Recursively list all files and folders in remote storage:
 
 ```bash
-./carbonio-files-client -cli -getAllNode
+./CarbonioFileSync -cli -getAllNode
 ```
 
 ### Download all files
@@ -29,7 +29,7 @@ Recursively list all files and folders in remote storage:
 Recursively download all remote files to the local `./files/` directory (created automatically):
 
 ```bash
-./carbonio-files-client -cli -downloadAllFiles
+./CarbonioFileSync -cli -downloadAllFiles
 ```
 
 A progress bar is shown for each file being downloaded.
@@ -37,7 +37,7 @@ A progress bar is shown for each file being downloaded.
 ### Upload a file
 
 ```bash
-./carbonio-files-client -cli -uploadFile "/path/to/file.txt" -parentId "<parent-node-id>"
+./CarbonioFileSync -cli -uploadFile "/path/to/file.txt" -parentId "<parent-node-id>"
 ```
 
 Use `-getAllNode` to find a parent node ID. The root of your personal files is typically `LOCAL_ROOT`.
@@ -45,7 +45,7 @@ Use `-getAllNode` to find a parent node ID. The root of your personal files is t
 ### Upload a new file version
 
 ```bash
-./carbonio-files-client -cli -uploadNewVersionFile "/path/to/file.txt" \
+./CarbonioFileSync -cli -uploadNewVersionFile "/path/to/file.txt" \
   -nodeId "<existing-node-id>" \
   -parentId "<parent-node-id>" \
   [-overwriteVersion]
@@ -56,7 +56,7 @@ Pass `-overwriteVersion` to overwrite the latest version instead of creating a n
 ### Create a remote folder
 
 ```bash
-./carbonio-files-client -cli -createFolder "FolderName" -parentId "<parent-node-id>"
+./CarbonioFileSync -cli -createFolder "FolderName" -parentId "<parent-node-id>"
 ```
 
 ### Move nodes
@@ -64,7 +64,7 @@ Pass `-overwriteVersion` to overwrite the latest version instead of creating a n
 Move one or more nodes to a different folder:
 
 ```bash
-./carbonio-files-client -cli -moveNodes \
+./CarbonioFileSync -cli -moveNodes \
   -nodesIdList "id1,id2,id3" \
   -destinationId "<destination-folder-id>"
 ```
@@ -74,7 +74,7 @@ Move one or more nodes to a different folder:
 Move nodes to trash (recoverable):
 
 ```bash
-./carbonio-files-client -cli -trashNodes -nodesIdList "id1,id2"
+./CarbonioFileSync -cli -trashNodes -nodesIdList "id1,id2"
 ```
 
 ### Delete nodes (permanent)
@@ -82,7 +82,7 @@ Move nodes to trash (recoverable):
 Permanently delete nodes:
 
 ```bash
-./carbonio-files-client -cli -deleteNodes -nodesIdList "id1,id2,id3"
+./CarbonioFileSync -cli -deleteNodes -nodesIdList "id1,id2,id3"
 ```
 
 ### Check sync differences (no cache)
@@ -90,7 +90,7 @@ Permanently delete nodes:
 Compare the local `./files/` directory with the remote storage and report differences without making any changes:
 
 ```bash
-./carbonio-files-client -cli -liveSyncCheck
+./CarbonioFileSync -cli -liveSyncCheck
 ```
 
 Differences reported include: missing paths, digest mismatches, size differences, and timestamp differences.
@@ -100,7 +100,7 @@ Differences reported include: missing paths, digest mismatches, size differences
 Populate the SQLite cache database (`<home>/.carbonio_files_sync/file_sync_cache.db`) with the current state of both local and remote files. Run this before any `-liveCacheSync`:
 
 ```bash
-./carbonio-files-client -cli -updateCacheSync
+./CarbonioFileSync -cli -updateCacheSync
 ```
 
 ### Bidirectional sync with cache
@@ -108,7 +108,7 @@ Populate the SQLite cache database (`<home>/.carbonio_files_sync/file_sync_cache
 Perform a smart bidirectional sync using the cache:
 
 ```bash
-./carbonio-files-client -cli -liveCacheSync
+./CarbonioFileSync -cli -liveCacheSync
 ```
 
 The sync proceeds in phases:
@@ -128,5 +128,5 @@ The cache database is updated after each operation.
 Run `-updateCacheSync` followed by `-liveCacheSync` in a single command, useful for unattended/scheduled runs:
 
 ```bash
-./carbonio-files-client -cli -fullCacheSync
+./CarbonioFileSync -cli -fullCacheSync
 ```
