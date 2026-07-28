@@ -58,3 +58,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+replace github.com/gen2brain/beeep => github.com/mgarbin/beeep v0.0.0-20260728160002-aca5f0cb0b2b
