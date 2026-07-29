@@ -48,9 +48,11 @@ export const logging = writable(freshLogging());
 
 // ---------- Docs Online browser ----------
 // tree is the root DocsOnlineNode (see App.GetDocsOnlineTree), containing
-// the whole filtered remote folder/file tree - fetched once per session
-// and navigated client-side from there. path is the list of folder nodes
-// (root excluded) currently drilled into, driving the breadcrumb.
+// the whole filtered remote folder/file tree - refetched every time
+// DocsOnlineBoard mounts (see its loadIfNeeded) since it only reads the
+// local sync cache, so it always reflects whatever the background sync
+// job has since found. path is the list of folder nodes (root excluded)
+// currently drilled into, driving the breadcrumb.
 export function freshDocsOnline() {
   return { loaded: false, loading: false, tree: null, path: [], error: null };
 }

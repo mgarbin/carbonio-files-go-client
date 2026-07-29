@@ -31,19 +31,61 @@
 
   onMount(loadIfNeeded);
 
+  // Runs on every mount of this component - not just the very first time
+  // the user opens Docs Online - so returning to this section later in
+  // the session (after the periodic background sync job, or a manual
+  // "Avvia Sincronizzazione", has since populated/changed the local sync
+  // cache) reflects the current cache instead of the empty/stale tree
+  // fetched the first time this section was opened. GetDocsOnlineTree
+  // only reads the local sqlite cache (see its doc comment), so refetching
+  // on every visit is cheap - no network round trip involved. Skips a
+  // redundant call while one is already in flight. The already-loaded
+  // tree stays on screen while a repeat fetch runs (the
+  // `$docsOnline.loading && !$docsOnline.loaded` guard in the template
+  // only shows the full-page loader on the very first load) and a repeat
+  // fetch that fails leaves the previous tree in place instead of
+  // replacing it with an error banner - only a first-load failure is
+  // surfaced to the user; a later silent failure is just logged.
   function loadIfNeeded() {
     const state = get(docsOnline);
-    if (state.loaded || state.loading) return;
+    if (state.loading) return;
+    const firstLoad = !state.loaded;
     docsOnline.update((s) => ({ ...s, loading: true, error: null }));
     api
       .getDocsOnlineTree()
       .then((tree) => {
-        docsOnline.update((s) => ({ ...s, loaded: true, loading: false, tree }));
+        docsOnline.update((s) => ({
+          ...s,
+          loaded: true,
+          loading: false,
+          tree,
+          // The breadcrumb path holds node references from the previous
+          // tree; re-resolve it against the freshly fetched one so a user
+          // who was drilled into a subfolder doesn't keep pointing at a
+          // detached, possibly out-of-date node object.
+          path: resolvePath(s.path, tree),
+        }));
       })
       .catch((err) => {
-        docsOnline.update((s) => ({ ...s, loading: false, error: "generic" }));
+        docsOnline.update((s) => ({ ...s, loading: false, error: firstLoad ? "generic" : s.error }));
         console.error(err);
       });
+  }
+
+  // Walks oldPath's folder ids against newTree level by level, stopping
+  // at the first id no longer found there (e.g. the folder was deleted,
+  // or moved, remotely) - landing on the deepest ancestor that still
+  // exists in the fresh tree instead of keeping a stale/dangling node.
+  function resolvePath(oldPath, newTree) {
+    const resolved = [];
+    let node = newTree;
+    for (const { id } of oldPath) {
+      const match = node.children.find((c) => c.isFolder && c.id === id);
+      if (!match) break;
+      resolved.push(match);
+      node = match;
+    }
+    return resolved;
   }
 
   // The folder currently on screen: the last breadcrumb entry, or the
