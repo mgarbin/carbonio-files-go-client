@@ -186,7 +186,16 @@ func LiveSyncCheck(endpoint, authToken, localFolder string, cacheSync bool) erro
 		return err
 	}
 
-	diffs := localfs.ComparePathMapsMulti(localMapItems, remoteMapItems)
+	// Diff against the same keys the download path will actually create on
+	// disk (see LiveCacheSync/localfs.SanitizeRelativePath), otherwise a
+	// remote name containing characters illegal on this OS would show up
+	// as a permanent false "missing" diff even after a successful sync.
+	sanitizedRemoteMapItems := make(map[string]localfs.ItemInfo, len(remoteMapItems))
+	for remotePath, item := range remoteMapItems {
+		sanitizedRemoteMapItems[localfs.SanitizeRelativePath(remotePath)] = item
+	}
+
+	diffs := localfs.ComparePathMapsMulti(localMapItems, sanitizedRemoteMapItems)
 	for itemPath, diffList := range diffs {
 		for _, diff := range diffList {
 			evt := log.Info().Str("path", itemPath).Str("difference", string(diff.Diff))
@@ -611,15 +620,16 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 			continue
 		}
 		if rec.IsDirectory {
-			localDirPath := filepath.Join(localFolder, filepath.FromSlash(rec.RemotePath))
+			localRelPath := localfs.SanitizeRelativePath(rec.RemotePath)
+			localDirPath := filepath.Join(localFolder, filepath.FromSlash(localRelPath))
 			if err := os.MkdirAll(localDirPath, 0755); err != nil {
 				log.Error().Err(err).Str("path", localDirPath).Msg("Creating local dir failed")
 				continue
 			}
 			log.Info().Str("path", localDirPath).Msg("Created local dir")
 			if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
-				"local_path":      rec.RemotePath,
-				"local_path_hash": localfs.PathHash(rec.RemotePath),
+				"local_path":      localRelPath,
+				"local_path_hash": localfs.PathHash(localRelPath),
 				"sync_status":     "synced",
 				"last_synced":     now,
 			}); updateErr != nil {
@@ -627,8 +637,9 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 			}
 			summary.New = append(summary.New, SyncChange{Path: rec.RemotePath, IsDirectory: true})
 		} else {
-			dirPart := path.Dir(rec.RemotePath)
-			fileName := path.Base(rec.RemotePath)
+			localRelPath := localfs.SanitizeRelativePath(rec.RemotePath)
+			dirPart := path.Dir(localRelPath)
+			fileName := path.Base(localRelPath)
 			destPath := localFolder
 			if dirPart != "." {
 				destPath = filepath.Join(localFolder, filepath.FromSlash(dirPart))
@@ -650,8 +661,8 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 				log.Info().Str("path", rec.RemotePath).Str("status", *exitStat).Msg("Download status")
 			}
 			if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
-				"local_path":      rec.RemotePath,
-				"local_path_hash": localfs.PathHash(rec.RemotePath),
+				"local_path":      localRelPath,
+				"local_path_hash": localfs.PathHash(localRelPath),
 				"local_size":      rec.RemoteSize,
 				"local_digest":    rec.RemoteDigest,
 				"sync_status":     "synced",
@@ -816,8 +827,9 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 		if remoteTime.Equal(localTime) || remoteTime.After(localTime) {
 			// Remote is more recent (or timestamps are equal): download the remote version.
 			log.Info().Str("path", rec.RemotePath).Msg("Remote version is more recent; downloading update")
-			dirPart := path.Dir(rec.RemotePath)
-			fileName := path.Base(rec.RemotePath)
+			localRelPath := localfs.SanitizeRelativePath(rec.RemotePath)
+			dirPart := path.Dir(localRelPath)
+			fileName := path.Base(localRelPath)
 			destPath := localFolder
 			if dirPart != "." {
 				destPath = filepath.Join(localFolder, filepath.FromSlash(dirPart))
@@ -839,8 +851,8 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 				log.Info().Str("path", rec.RemotePath).Str("status", *exitStat).Msg("Download status")
 			}
 			if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
-				"local_path":          rec.RemotePath,
-				"local_path_hash":     localfs.PathHash(rec.RemotePath),
+				"local_path":          localRelPath,
+				"local_path_hash":     localfs.PathHash(localRelPath),
 				"local_size":          rec.RemoteSize,
 				"local_digest":        rec.RemoteDigest,
 				"local_last_modified": rec.RemoteLastModified,

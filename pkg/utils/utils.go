@@ -143,46 +143,32 @@ func RecursiveFileDownloader(graphqlAuthenticator *graphql.GraphQLAuthenticator,
 
 	for _, child := range nodes {
 		if child.Type == "FOLDER" {
-			folderPath := folderPath + "/" + child.Name
+			folderPath := folderPath + "/" + localfs.SanitizeRelativePath(child.Name)
 			if err := CreateLocalFolder(folderPath); err != nil {
 				log.Warn().Err(err).Str("path", folderPath).Msg("Creating local folder failed")
 			}
 			RecursiveFileDownloader(graphqlAuthenticator, carbonio, child.ID, folderPath)
 		} else {
+			remoteName := child.Name
 			if child.Extension != nil {
-				fileName := child.Name + "." + *child.Extension
-				wg.Add(1)
-				sem <- struct{}{} // acquire semaphore slot
-				go func() {
-					exitStat, downErr := carbonio.DownloadFile(graphqlAuthenticator.AuthToken, child.ID, folderPath, fileName, int64(*child.Size), maxRetries, &wg, sem)
-					destPath := folderPath + "/" + fileName
-					if downErr != nil {
-						log.Error().Err(downErr).Str("path", destPath).Msg("Download failed")
-						return
-					}
-					evt := log.Info().Str("path", destPath)
-					if exitStat != nil {
-						evt = evt.Str("status", *exitStat)
-					}
-					evt.Msg("Downloaded file")
-				}()
-			} else {
-				wg.Add(1)
-				sem <- struct{}{} // acquire semaphore slot
-				go func() {
-					exitStat, downErr := carbonio.DownloadFile(graphqlAuthenticator.AuthToken, child.ID, folderPath, child.Name, int64(*child.Size), maxRetries, &wg, sem)
-					destPath := folderPath + "/" + child.Name
-					if downErr != nil {
-						log.Error().Err(downErr).Str("path", destPath).Msg("Download failed")
-						return
-					}
-					evt := log.Info().Str("path", destPath)
-					if exitStat != nil {
-						evt = evt.Str("status", *exitStat)
-					}
-					evt.Msg("Downloaded file")
-				}()
+				remoteName = child.Name + "." + *child.Extension
 			}
+			fileName := localfs.SanitizeRelativePath(remoteName)
+			wg.Add(1)
+			sem <- struct{}{} // acquire semaphore slot
+			go func() {
+				exitStat, downErr := carbonio.DownloadFile(graphqlAuthenticator.AuthToken, child.ID, folderPath, fileName, int64(*child.Size), maxRetries, &wg, sem)
+				destPath := folderPath + "/" + fileName
+				if downErr != nil {
+					log.Error().Err(downErr).Str("path", destPath).Msg("Download failed")
+					return
+				}
+				evt := log.Info().Str("path", destPath)
+				if exitStat != nil {
+					evt = evt.Str("status", *exitStat)
+				}
+				evt.Msg("Downloaded file")
+			}()
 		}
 	}
 
