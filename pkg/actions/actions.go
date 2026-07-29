@@ -564,6 +564,43 @@ func (s SyncSummary) HasChanges() bool {
 	return len(s.New) > 0 || len(s.Modified) > 0 || len(s.Deleted) > 0
 }
 
+// findExistingRemoteChild looks up parentNodeID's children on the remote
+// server for one already matching name (folders) or name+size+digest
+// (files, when a digest is available on both sides). It backs the
+// local_only upload loop's ambiguous-failure handling below:
+// CreateFolder/UploadFile can return a client-side error (e.g. a timeout)
+// even after the mutation already succeeded server-side, and neither call
+// is safe to blindly retry - a second call would create a duplicate
+// remote node with the same name, since Carbonio identifies nodes by ID,
+// not by uniqueness of name within a parent. Returns (nil, nil) when
+// nothing matches, which the caller must treat as a genuine failure to
+// retry next cycle rather than a success.
+func findExistingRemoteChild(graphqlAuthenticator *graphql.GraphQLAuthenticator, parentNodeID, name string, isDirectory bool, size int64, digest string) (*graphql.Node, error) {
+	children, err := graphqlAuthenticator.GetAllNode(parentNodeID, "NAME_ASC", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	for _, child := range children {
+		if child == nil || child.Name != name {
+			continue
+		}
+		if isDirectory {
+			if child.Type == "FOLDER" {
+				return child, nil
+			}
+			continue
+		}
+		if child.Type != "FILE" || child.Size == nil || int64(*child.Size) != size {
+			continue
+		}
+		if digest != "" && (child.Digest == nil || *child.Digest != digest) {
+			continue
+		}
+		return child, nil
+	}
+	return nil, nil
+}
+
 // LiveCacheSync reconciles localFolder and the remote tree using the sqlite
 // sync cache: it downloads remote-only items, uploads local-only items,
 // resolves out-of-sync items by timestamp, and propagates deletions in both
@@ -725,7 +762,16 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 			newFolder, err := graphqlAuthenticator.CreateFolder(parentNodeID, folderName)
 			if err != nil {
 				log.Error().Err(err).Str("path", rec.LocalPath).Msg("Creating remote folder failed")
-				continue
+				existing, lookupErr := findExistingRemoteChild(graphqlAuthenticator, parentNodeID, folderName, true, 0, "")
+				if lookupErr != nil {
+					log.Warn().Err(lookupErr).Str("path", rec.LocalPath).Msg("Existence check after failed folder creation failed")
+					continue
+				}
+				if existing == nil {
+					continue
+				}
+				log.Info().Str("path", rec.LocalPath).Str("nodeId", existing.ID).Msg("Remote folder already existed despite the create error; adopting it")
+				newFolder = &graphql.Folder{ID: existing.ID, Name: existing.Name}
 			}
 			if newFolder != nil {
 				pathToNodeID[rec.LocalPath] = newFolder.ID
@@ -745,7 +791,16 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 			uploadedNodeID, uploadErr := carbonioAuth.UploadFile(authToken, parentNodeID, filePath, false, false, nil)
 			if uploadErr != nil {
 				log.Error().Err(uploadErr).Str("path", rec.LocalPath).Msg("Uploading failed")
-				continue
+				existing, lookupErr := findExistingRemoteChild(graphqlAuthenticator, parentNodeID, path.Base(rec.LocalPath), false, rec.LocalSize, rec.LocalDigest)
+				if lookupErr != nil {
+					log.Warn().Err(lookupErr).Str("path", rec.LocalPath).Msg("Existence check after failed upload failed")
+					continue
+				}
+				if existing == nil {
+					continue
+				}
+				log.Info().Str("path", rec.LocalPath).Str("nodeId", existing.ID).Msg("Remote file already existed despite the upload error; adopting it")
+				uploadedNodeID = existing.ID
 			}
 			log.Info().Str("path", rec.LocalPath).Str("nodeId", uploadedNodeID).Msg("Uploaded")
 			pathToNodeID[rec.LocalPath] = uploadedNodeID

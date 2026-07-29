@@ -1,6 +1,7 @@
 package actions
 
 import (
+	"carbonio-files-go-client/pkg/graphql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -147,5 +148,100 @@ func TestSyncSummary_HasChanges(t *testing.T) {
 				t.Fatalf("HasChanges() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// newExistingChildrenServer starts a self-signed TLS server that answers
+// any getChildren GraphQL query with children as the getNode.children.nodes
+// payload - used to drive findExistingRemoteChild's matching logic without
+// depending on graphqlAPI's own request-building internals.
+func newExistingChildrenServer(t *testing.T, children []map[string]any) string {
+	t.Helper()
+	return newSelfSignedActionsServer(t, map[string]any{
+		"data": map[string]any{
+			"getNode": map[string]any{
+				"children": map[string]any{
+					"nodes": children,
+				},
+			},
+		},
+	})
+}
+
+// TestFindExistingRemoteChild_MatchesFolderByName verifies a FOLDER child
+// matching the requested name is treated as the folder a prior
+// CreateFolder call already created remotely, despite the client seeing an
+// error for that call - see LiveCacheSync's local_only directory branch.
+func TestFindExistingRemoteChild_MatchesFolderByName(t *testing.T) {
+	endpoint := newExistingChildrenServer(t, []map[string]any{
+		{"id": "folder-1", "name": "Reports", "type": "FOLDER"},
+	})
+	auth := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: "tok"}
+
+	got, err := findExistingRemoteChild(auth, "parent-1", "Reports", true, 0, "")
+	if err != nil {
+		t.Fatalf("findExistingRemoteChild() error = %v", err)
+	}
+	if got == nil || got.ID != "folder-1" {
+		t.Fatalf("findExistingRemoteChild() = %+v, want folder-1", got)
+	}
+}
+
+// TestFindExistingRemoteChild_MatchesFileByNameSizeDigest verifies a FILE
+// child is only adopted when its name, size and digest all match - the
+// signal needed to tell "the previous upload actually succeeded" apart
+// from "an unrelated file happens to share this name".
+func TestFindExistingRemoteChild_MatchesFileByNameSizeDigest(t *testing.T) {
+	endpoint := newExistingChildrenServer(t, []map[string]any{
+		{"id": "wrong-name", "name": "other.txt", "type": "FILE", "size": 42.0, "digest": "abc123"},
+		{"id": "file-1", "name": "report.txt", "type": "FILE", "size": 42.0, "digest": "abc123"},
+	})
+	auth := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: "tok"}
+
+	got, err := findExistingRemoteChild(auth, "parent-1", "report.txt", false, 42, "abc123")
+	if err != nil {
+		t.Fatalf("findExistingRemoteChild() error = %v", err)
+	}
+	if got == nil || got.ID != "file-1" {
+		t.Fatalf("findExistingRemoteChild() = %+v, want file-1", got)
+	}
+}
+
+// TestFindExistingRemoteChild_DigestMismatchNoMatch verifies a same-named,
+// same-sized FILE child with a different digest is rejected: matching
+// content, not just a coincidental name, is what proves the earlier
+// upload succeeded - a mismatch must fall through to a genuine retry
+// rather than silently adopting an unrelated node.
+func TestFindExistingRemoteChild_DigestMismatchNoMatch(t *testing.T) {
+	endpoint := newExistingChildrenServer(t, []map[string]any{
+		{"id": "file-1", "name": "report.txt", "type": "FILE", "size": 42.0, "digest": "different-digest"},
+	})
+	auth := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: "tok"}
+
+	got, err := findExistingRemoteChild(auth, "parent-1", "report.txt", false, 42, "abc123")
+	if err != nil {
+		t.Fatalf("findExistingRemoteChild() error = %v", err)
+	}
+	if got != nil {
+		t.Fatalf("findExistingRemoteChild() = %+v, want nil (digest mismatch)", got)
+	}
+}
+
+// TestFindExistingRemoteChild_NoMatchReturnsNil verifies a genuinely
+// missing node reports (nil, nil) - the caller's signal to treat the
+// original CreateFolder/UploadFile error as a real failure and retry next
+// cycle rather than adopting an unrelated node.
+func TestFindExistingRemoteChild_NoMatchReturnsNil(t *testing.T) {
+	endpoint := newExistingChildrenServer(t, []map[string]any{
+		{"id": "unrelated", "name": "unrelated.txt", "type": "FILE", "size": 1.0, "digest": "zzz"},
+	})
+	auth := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: "tok"}
+
+	got, err := findExistingRemoteChild(auth, "parent-1", "report.txt", false, 42, "abc123")
+	if err != nil {
+		t.Fatalf("findExistingRemoteChild() error = %v", err)
+	}
+	if got != nil {
+		t.Fatalf("findExistingRemoteChild() = %+v, want nil", got)
 	}
 }
