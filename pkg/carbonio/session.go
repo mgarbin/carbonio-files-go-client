@@ -36,6 +36,17 @@ func NewSession(auth *HTTPAuthenticator, store *sqlitecache.SqliteHelper, userna
 	return &Session{Auth: auth, Store: store, Username: username, Password: password}
 }
 
+// NewSessionWithToken constructs a Session pre-loaded with token, usable
+// immediately via Token() without an initial Login call - for callers that
+// already hold a valid ZM_AUTH_TOKEN from elsewhere (e.g. config.yaml's
+// explicit authToken override). Reauthenticate still requires
+// username/password to succeed: if they're empty, a later 401 fails to
+// refresh and the original error is returned, exactly like a caller with
+// no credentials at all.
+func NewSessionWithToken(auth *HTTPAuthenticator, store *sqlitecache.SqliteHelper, username, password, token string) *Session {
+	return &Session{Auth: auth, Store: store, Username: username, Password: password, token: token}
+}
+
 // Login returns a usable ZM_AUTH_TOKEN. If Store holds a token saved from a
 // previous run, it is validated against the server (ValidateToken) and
 // reused as-is when still accepted - no password ever leaves the client in

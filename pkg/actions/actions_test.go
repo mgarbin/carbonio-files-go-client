@@ -1,6 +1,7 @@
 package actions
 
 import (
+	"carbonio-files-go-client/pkg/carbonio"
 	"carbonio-files-go-client/pkg/graphql"
 	"encoding/json"
 	"net/http"
@@ -8,6 +9,14 @@ import (
 	"strings"
 	"testing"
 )
+
+// newTestSession builds a *carbonio.Session pre-loaded with token and no
+// reauthentication capability (no Store, no credentials) - enough for
+// every actions entry point under test here, none of which exercise the
+// 401-retry path (that's covered directly in pkg/graphql).
+func newTestSession(token string) *carbonio.Session {
+	return carbonio.NewSessionWithToken(&carbonio.HTTPAuthenticator{}, nil, "", "", token)
+}
 
 // newSelfSignedActionsServer starts a TLS server (self-signed certificate,
 // same as httptest.NewTLSServer always produces) that answers every POST
@@ -40,7 +49,7 @@ func TestMoveNodes_EmptyArguments(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			if err := MoveNodes("unused-endpoint", "tok", tc.destinationId, tc.nodesIdList); err == nil {
+			if err := MoveNodes("unused-endpoint", newTestSession("tok"), tc.destinationId, tc.nodesIdList); err == nil {
 				t.Fatalf("MoveNodes(destinationId=%q, nodesIdList=%q) error = nil, want non-nil", tc.destinationId, tc.nodesIdList)
 			}
 		})
@@ -50,7 +59,7 @@ func TestMoveNodes_EmptyArguments(t *testing.T) {
 // TestTrashNodes_EmptyNodesIdList locks in that TrashNodes rejects a
 // missing nodesIdList before ever touching the network.
 func TestTrashNodes_EmptyNodesIdList(t *testing.T) {
-	if err := TrashNodes("unused-endpoint", "tok", ""); err == nil {
+	if err := TrashNodes("unused-endpoint", newTestSession("tok"), ""); err == nil {
 		t.Fatalf("TrashNodes(nodesIdList=\"\") error = nil, want non-nil")
 	}
 }
@@ -58,7 +67,7 @@ func TestTrashNodes_EmptyNodesIdList(t *testing.T) {
 // TestDeleteNodes_EmptyNodesIdList locks in that DeleteNodes rejects a
 // missing nodesIdList before ever touching the network.
 func TestDeleteNodes_EmptyNodesIdList(t *testing.T) {
-	if err := DeleteNodes("unused-endpoint", "tok", ""); err == nil {
+	if err := DeleteNodes("unused-endpoint", newTestSession("tok"), ""); err == nil {
 		t.Fatalf("DeleteNodes(nodesIdList=\"\") error = nil, want non-nil")
 	}
 }
@@ -76,7 +85,7 @@ func TestMoveNodes_AcceptsSelfSignedCertificate(t *testing.T) {
 		},
 	})
 
-	if err := MoveNodes(endpoint, "tok-123", "dest-1", "node-1"); err != nil {
+	if err := MoveNodes(endpoint, newTestSession("tok-123"), "dest-1", "node-1"); err != nil {
 		t.Fatalf("MoveNodes() error = %v, want nil (self-signed cert must be accepted)", err)
 	}
 }
@@ -89,7 +98,7 @@ func TestTrashNodes_AcceptsSelfSignedCertificate(t *testing.T) {
 		"data": map[string]any{"trashNodes": []string{"node-1"}},
 	})
 
-	if err := TrashNodes(endpoint, "tok-123", "node-1"); err != nil {
+	if err := TrashNodes(endpoint, newTestSession("tok-123"), "node-1"); err != nil {
 		t.Fatalf("TrashNodes() error = %v, want nil (self-signed cert must be accepted)", err)
 	}
 }
@@ -102,7 +111,7 @@ func TestDeleteNodes_AcceptsSelfSignedCertificate(t *testing.T) {
 		"data": map[string]any{"deleteNodes": []string{"node-1"}},
 	})
 
-	if err := DeleteNodes(endpoint, "tok-123", "node-1"); err != nil {
+	if err := DeleteNodes(endpoint, newTestSession("tok-123"), "node-1"); err != nil {
 		t.Fatalf("DeleteNodes() error = %v, want nil (self-signed cert must be accepted)", err)
 	}
 }

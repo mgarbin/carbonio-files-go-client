@@ -263,18 +263,25 @@ func runCLI() {
 		log.Info().Str("folder", localFolder).Msg("Local folder created")
 	}
 
-	var zmAuthToken string
+	var session *carbonio.Session
 	if cfg.Main.AuthToken != nil && *cfg.Main.AuthToken != "" {
 		// Explicit override in config.yaml: use it verbatim and skip both
-		// the cached-token store and the login step entirely.
-		zmAuthToken = *cfg.Main.AuthToken
+		// the cached-token store and the login step entirely. A
+		// Reauthenticate attempt later (if the server ever rejects this
+		// pinned token) still works whenever Main.Username/Password are
+		// also set; otherwise it fails gracefully and the original error
+		// is returned, matching the pre-existing behavior.
+		session = carbonio.NewSessionWithToken(carbonioAuth, nil, cfg.Main.Username, cfg.Main.Password, *cfg.Main.AuthToken)
 	} else {
-		token, err := loginWithCachedToken(carbonioAuth, cfg.Main.Username, cfg.Main.Password)
+		s, err := loginWithCachedToken(carbonioAuth, cfg.Main.Username, cfg.Main.Password)
 		if err != nil {
 			log.Error().Err(err).Msg("Error obtaining Carbonio token")
 			return
 		}
-		zmAuthToken = token
+		if s.Store != nil {
+			defer s.Store.Close()
+		}
+		session = s
 	}
 
 	if *printFlagInfo {
@@ -282,63 +289,63 @@ func runCLI() {
 	}
 
 	if *listAllNode {
-		actions.ListAllNode(cfg.Main.Endpoint, zmAuthToken)
+		actions.ListAllNode(cfg.Main.Endpoint, session)
 	}
 
 	if *downloadAllFiles {
-		actions.DownloadAllFiles(cfg.Main.Endpoint, zmAuthToken, carbonioAuth)
+		actions.DownloadAllFiles(cfg.Main.Endpoint, session, carbonioAuth)
 	}
 
 	if *uploadFile != "" && *parentId != "" {
-		actions.UploadFile(carbonioAuth, zmAuthToken, *parentId, *uploadFile, nodeId)
+		actions.UploadFile(carbonioAuth, session, *parentId, *uploadFile, nodeId)
 	}
 
 	if *uploadNewVersionFile != "" && *nodeId != "" && *parentId != "" {
-		actions.UploadNewVersionFile(carbonioAuth, zmAuthToken, *parentId, *uploadNewVersionFile, *overwriteVersion, nodeId)
+		actions.UploadNewVersionFile(carbonioAuth, session, *parentId, *uploadNewVersionFile, *overwriteVersion, nodeId)
 	}
 
 	if *createFolder != "" && *parentId != "" {
-		actions.CreateFolder(cfg.Main.Endpoint, zmAuthToken, *parentId, *createFolder)
+		actions.CreateFolder(cfg.Main.Endpoint, session, *parentId, *createFolder)
 	}
 
 	if *moveNodes {
-		if err := actions.MoveNodes(cfg.Main.Endpoint, zmAuthToken, *destinationId, *nodesIdList); err != nil {
+		if err := actions.MoveNodes(cfg.Main.Endpoint, session, *destinationId, *nodesIdList); err != nil {
 			return
 		}
 	}
 
 	if *trashNodes {
-		if err := actions.TrashNodes(cfg.Main.Endpoint, zmAuthToken, *nodesIdList); err != nil {
+		if err := actions.TrashNodes(cfg.Main.Endpoint, session, *nodesIdList); err != nil {
 			return
 		}
 	}
 
 	if *deleteNodes {
-		if err := actions.DeleteNodes(cfg.Main.Endpoint, zmAuthToken, *nodesIdList); err != nil {
+		if err := actions.DeleteNodes(cfg.Main.Endpoint, session, *nodesIdList); err != nil {
 			return
 		}
 	}
 
 	if *liveSyncCheck {
-		if err := actions.LiveSyncCheck(cfg.Main.Endpoint, zmAuthToken, localFolder, *cacheSync); err != nil {
+		if err := actions.LiveSyncCheck(cfg.Main.Endpoint, session, localFolder, *cacheSync); err != nil {
 			return
 		}
 	}
 
 	if *updateCacheSync {
-		if err := actions.UpdateCacheSync(cfg.Main.Endpoint, zmAuthToken, localFolder); err != nil {
+		if err := actions.UpdateCacheSync(cfg.Main.Endpoint, session, localFolder); err != nil {
 			return
 		}
 	}
 
 	if *liveCacheSync {
-		if _, err := actions.LiveCacheSync(cfg.Main.Endpoint, zmAuthToken, localFolder, carbonioAuth, cfg.Sync.DeleteRemoteNode); err != nil {
+		if _, err := actions.LiveCacheSync(cfg.Main.Endpoint, session, localFolder, carbonioAuth, cfg.Sync.DeleteRemoteNode); err != nil {
 			return
 		}
 	}
 
 	if *fullCacheSync {
-		if _, err := actions.FullCacheSync(cfg.Main.Endpoint, zmAuthToken, localFolder, carbonioAuth, cfg.Sync.DeleteRemoteNode); err != nil {
+		if _, err := actions.FullCacheSync(cfg.Main.Endpoint, session, localFolder, carbonioAuth, cfg.Sync.DeleteRemoteNode); err != nil {
 			return
 		}
 	}
@@ -346,21 +353,28 @@ func runCLI() {
 
 // loginWithCachedToken opens the CLI's encrypted token store
 // (appdir.Path("file_sync_cache.db"), the same SQLite database the
-// -*CacheSync flags use) and obtains a ZM_AUTH_TOKEN through
-// carbonio.Session: a token saved from a previous run is reused as-is when
-// the server still accepts it, otherwise a fresh username/password login is
-// performed and its token is persisted (encrypted at rest) for the next run
-// to reuse.
-func loginWithCachedToken(auth *carbonio.HTTPAuthenticator, username, password string) (string, error) {
+// -*CacheSync flags use) and returns a *carbonio.Session already holding a
+// usable ZM_AUTH_TOKEN: a token saved from a previous run is reused as-is
+// when the server still accepts it, otherwise a fresh username/password
+// login is performed and its token is persisted (encrypted at rest) for
+// the next run to reuse. The caller owns the returned Session's Store and
+// must close it (e.g. `defer session.Store.Close()`) once done - it stays
+// open so a later 401 mid-run can transparently re-authenticate and
+// persist the refreshed token via Session.Reauthenticate.
+func loginWithCachedToken(auth *carbonio.HTTPAuthenticator, username, password string) (*carbonio.Session, error) {
 	store, err := sqlitecache.NewSqliteHelper(appdir.Path("file_sync_cache.db"))
 	if err != nil {
-		return "", fmt.Errorf("opening token store: %w", err)
+		return nil, fmt.Errorf("opening token store: %w", err)
 	}
-	defer store.Close()
 
 	session := carbonio.NewSession(auth, store, username, password)
-	return session.Login()
+	if _, err := session.Login(); err != nil {
+		store.Close()
+		return nil, err
+	}
+	return session, nil
 }
+
 
 // firstNonEmpty returns the first non-empty string in vals, or "" if all are
 // empty. Used to apply the "-flag overrides config.yaml overrides built-in

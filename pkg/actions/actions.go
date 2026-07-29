@@ -35,25 +35,25 @@ func PrintFlagInfo() {
 
 // ListAllNode prints the whole remote node tree starting from LOCAL_ROOT.
 // Backs the -getAllNode flag.
-func ListAllNode(endpoint, authToken string) {
+func ListAllNode(endpoint string, session *carbonio.Session) {
 	log.Info().Msg("Here all nodes found with graphl query!")
-	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: authToken}
+	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: session.Token(), TokenRefresher: session.Reauthenticate}
 	baseFolder := "LOCAL_ROOT"
 	utils.RecursiveListNode(graphqlAuthenticator, baseFolder, 0)
 }
 
 // DownloadAllFiles recreates the remote folder tree locally under "files"
 // and downloads every file. Backs the -downloadAllFiles flag.
-func DownloadAllFiles(endpoint, authToken string, carbonioAuth *carbonio.HTTPAuthenticator) {
-	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: authToken}
+func DownloadAllFiles(endpoint string, session *carbonio.Session, carbonioAuth *carbonio.HTTPAuthenticator) {
+	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: session.Token(), TokenRefresher: session.Reauthenticate}
 	baseFolder := "LOCAL_ROOT"
 	utils.RecursiveFileDownloader(graphqlAuthenticator, carbonioAuth, baseFolder, "files")
 }
 
 // UploadFile uploads uploadFile as a new node under parentId. Backs the
 // -uploadFile flag.
-func UploadFile(carbonioAuth *carbonio.HTTPAuthenticator, authToken, parentId, uploadFile string, nodeId *string) {
-	newNodeID, uploadErr := carbonioAuth.UploadFile(authToken, parentId, uploadFile, false, false, nodeId)
+func UploadFile(carbonioAuth *carbonio.HTTPAuthenticator, session *carbonio.Session, parentId, uploadFile string, nodeId *string) {
+	newNodeID, uploadErr := carbonioAuth.UploadFile(session.Token(), parentId, uploadFile, false, false, nodeId)
 	if uploadErr != nil {
 		log.Error().Err(uploadErr).Msg("Upload file failed")
 	} else {
@@ -63,8 +63,8 @@ func UploadFile(carbonioAuth *carbonio.HTTPAuthenticator, authToken, parentId, u
 
 // UploadNewVersionFile uploads uploadNewVersionFile as a new version of
 // nodeId under parentId. Backs the -uploadNewVersionFile flag.
-func UploadNewVersionFile(carbonioAuth *carbonio.HTTPAuthenticator, authToken, parentId, uploadNewVersionFile string, overwriteVersion bool, nodeId *string) {
-	newNodeID, uploadErr := carbonioAuth.UploadFile(authToken, parentId, uploadNewVersionFile, true, overwriteVersion, nodeId)
+func UploadNewVersionFile(carbonioAuth *carbonio.HTTPAuthenticator, session *carbonio.Session, parentId, uploadNewVersionFile string, overwriteVersion bool, nodeId *string) {
+	newNodeID, uploadErr := carbonioAuth.UploadFile(session.Token(), parentId, uploadNewVersionFile, true, overwriteVersion, nodeId)
 	if uploadErr != nil {
 		log.Error().Err(uploadErr).Msg("Upload new version failed")
 	} else {
@@ -74,8 +74,8 @@ func UploadNewVersionFile(carbonioAuth *carbonio.HTTPAuthenticator, authToken, p
 
 // CreateFolder creates a remote folder named folderName under parentId.
 // Backs the -createFolder flag.
-func CreateFolder(endpoint, authToken, parentId, folderName string) {
-	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: authToken}
+func CreateFolder(endpoint string, session *carbonio.Session, parentId, folderName string) {
+	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: session.Token(), TokenRefresher: session.Reauthenticate}
 	newFolder, err := graphqlAuthenticator.CreateFolder(parentId, folderName)
 	if err != nil {
 		log.Error().Err(err).Msg("Create folder failed")
@@ -87,12 +87,12 @@ func CreateFolder(endpoint, authToken, parentId, folderName string) {
 // MoveNodes moves the comma-separated nodesIdList to destinationId. Backs
 // the -moveNodes flag. A non-nil error means the caller should abort, the
 // message has already been printed.
-func MoveNodes(endpoint, authToken, destinationId, nodesIdList string) error {
+func MoveNodes(endpoint string, session *carbonio.Session, destinationId, nodesIdList string) error {
 	if destinationId == "" || nodesIdList == "" {
 		log.Error().Msg("destinationId and nodesIdList must be provided for moveNodes")
 		return fmt.Errorf("destinationId and nodesIdList must be provided for moveNodes")
 	}
-	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: authToken}
+	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: session.Token(), TokenRefresher: session.Reauthenticate}
 	nodeIDs := strings.Split(nodesIdList, ",")
 	moveResp, err := graphqlAuthenticator.MoveNodes(nodeIDs, destinationId)
 	if err != nil {
@@ -127,12 +127,12 @@ func resolveDeleteMode(mode string) string {
 // TrashNodes moves the comma-separated nodesIdList to trash. Backs the
 // -trashNodes flag. A non-nil error means the caller should abort, the
 // message has already been printed.
-func TrashNodes(endpoint, authToken, nodesIdList string) error {
+func TrashNodes(endpoint string, session *carbonio.Session, nodesIdList string) error {
 	if nodesIdList == "" {
 		log.Error().Msg("nodesIdList must be provided for trashNodes")
 		return fmt.Errorf("nodesIdList must be provided for trashNodes")
 	}
-	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: authToken}
+	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: session.Token(), TokenRefresher: session.Reauthenticate}
 	nodeIDs := strings.Split(nodesIdList, ",")
 	trashResp, err := graphqlAuthenticator.TrashNodes(nodeIDs)
 	if err != nil {
@@ -146,12 +146,12 @@ func TrashNodes(endpoint, authToken, nodesIdList string) error {
 // DeleteNodes permanently deletes the comma-separated nodesIdList. Backs the
 // -deleteNodes flag. A non-nil error means the caller should abort, the
 // message has already been printed.
-func DeleteNodes(endpoint, authToken, nodesIdList string) error {
+func DeleteNodes(endpoint string, session *carbonio.Session, nodesIdList string) error {
 	if nodesIdList == "" {
 		log.Error().Msg("nodesIdList must be provided for deleteNodes")
 		return fmt.Errorf("nodesIdList must be provided for deleteNodes")
 	}
-	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: authToken}
+	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: session.Token(), TokenRefresher: session.Reauthenticate}
 	nodeIDs := strings.Split(nodesIdList, ",")
 	deleteResp, err := graphqlAuthenticator.DeleteNodes(nodeIDs)
 	if err != nil {
@@ -165,7 +165,7 @@ func DeleteNodes(endpoint, authToken, nodesIdList string) error {
 // LiveSyncCheck compares localFolder against the remote tree and prints the
 // differences found. Backs the -liveSyncCheck flag. A non-nil error means
 // the caller should abort, the message has already been printed.
-func LiveSyncCheck(endpoint, authToken, localFolder string, cacheSync bool) error {
+func LiveSyncCheck(endpoint string, session *carbonio.Session, localFolder string, cacheSync bool) error {
 
 	if cacheSync {
 		log.Warn().Msg("Cache sync not yet implemented")
@@ -177,7 +177,7 @@ func LiveSyncCheck(endpoint, authToken, localFolder string, cacheSync bool) erro
 		return err
 	}
 
-	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: authToken}
+	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: session.Token(), TokenRefresher: session.Reauthenticate}
 	baseFolder := "LOCAL_ROOT"
 
 	remoteMapItems, err := utils.RecursiveListNodeItems(graphqlAuthenticator, baseFolder, "")
@@ -219,8 +219,8 @@ func LiveSyncCheck(endpoint, authToken, localFolder string, cacheSync bool) erro
 // cache's sync_meta table via recordCacheSyncRun so the GUI dashboard can
 // display "last sync" time and surface the last error without re-running
 // the scan.
-func UpdateCacheSync(endpoint, authToken, localFolder string) error {
-	err := updateCacheSync(endpoint, authToken, localFolder)
+func UpdateCacheSync(endpoint string, session *carbonio.Session, localFolder string) error {
+	err := updateCacheSync(endpoint, session, localFolder)
 	recordCacheSyncRun(err)
 	return err
 }
@@ -249,7 +249,7 @@ func recordCacheSyncRun(runErr error) {
 // updateCacheSync is UpdateCacheSync's implementation, wrapped so every
 // return path - including the early ones below - gets its outcome recorded
 // by recordCacheSyncRun without threading that call through each one.
-func updateCacheSync(endpoint, authToken, localFolder string) error {
+func updateCacheSync(endpoint string, session *carbonio.Session, localFolder string) error {
 
 	// Initialize SQLite database
 	newdb, err := sqlitecache.NewSqliteHelper(appdir.Path("file_sync_cache.db"))
@@ -268,7 +268,7 @@ func updateCacheSync(endpoint, authToken, localFolder string) error {
 	log.Info().Int("count", len(localMapItems)).Msg("Found local items")
 
 	// Fetch remote items from GraphQL
-	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: authToken}
+	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: session.Token(), TokenRefresher: session.Reauthenticate}
 	baseFolder := "LOCAL_ROOT"
 	remoteMapItems, err := utils.RecursiveListNodeItems(graphqlAuthenticator, baseFolder, "")
 	if err != nil {
@@ -610,7 +610,7 @@ func findExistingRemoteChild(graphqlAuthenticator *graphql.GraphQLAuthenticator,
 // removes it; any other value falls back to DeleteModeTrash (see
 // resolveDeleteMode). A non-nil error means the caller should abort, the
 // message has already been printed.
-func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbonio.HTTPAuthenticator, deleteRemoteNode string) (SyncSummary, error) {
+func LiveCacheSync(endpoint string, session *carbonio.Session, localFolder string, carbonioAuth *carbonio.HTTPAuthenticator, deleteRemoteNode string) (SyncSummary, error) {
 	summary := SyncSummary{}
 
 	// Open the existing SQLite cache database
@@ -621,7 +621,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 	}
 	defer cacheDb.Close()
 
-	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: authToken}
+	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: session.Token(), TokenRefresher: session.Reauthenticate}
 
 	// Build a path → node_id map from every record that already has a remote presence
 	allRecords, err := cacheDb.QueryAll()
@@ -689,7 +689,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 			sem := make(chan struct{}, 1)
 			wg.Add(1)
 			sem <- struct{}{}
-			exitStat, downErr := carbonioAuth.DownloadFile(authToken, rec.NodeID, destPath, fileName, rec.RemoteSize, maxRetries, &wg, sem)
+			exitStat, downErr := carbonioAuth.DownloadFile(session.Token(), rec.NodeID, destPath, fileName, rec.RemoteSize, maxRetries, &wg, sem)
 			wg.Wait()
 			if downErr != nil {
 				log.Error().Err(downErr).Str("path", rec.RemotePath).Msg("Downloading failed")
@@ -788,7 +788,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 			}
 		} else {
 			filePath := filepath.Join(localFolder, filepath.FromSlash(rec.LocalPath))
-			uploadedNodeID, uploadErr := carbonioAuth.UploadFile(authToken, parentNodeID, filePath, false, false, nil)
+			uploadedNodeID, uploadErr := carbonioAuth.UploadFile(session.Token(), parentNodeID, filePath, false, false, nil)
 			if uploadErr != nil {
 				log.Error().Err(uploadErr).Str("path", rec.LocalPath).Msg("Uploading failed")
 				existing, lookupErr := findExistingRemoteChild(graphqlAuthenticator, parentNodeID, path.Base(rec.LocalPath), false, rec.LocalSize, rec.LocalDigest)
@@ -897,7 +897,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 			sem := make(chan struct{}, 1)
 			wg.Add(1)
 			sem <- struct{}{}
-			exitStat, downErr := carbonioAuth.DownloadFile(authToken, rec.NodeID, destPath, fileName, rec.RemoteSize, maxRetries, &wg, sem)
+			exitStat, downErr := carbonioAuth.DownloadFile(session.Token(), rec.NodeID, destPath, fileName, rec.RemoteSize, maxRetries, &wg, sem)
 			wg.Wait()
 			if downErr != nil {
 				log.Error().Err(downErr).Str("path", rec.RemotePath).Msg("Downloading updated file failed")
@@ -938,7 +938,7 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 			}
 			filePath := filepath.Join(localFolder, filepath.FromSlash(rec.LocalPath))
 			nodeIDStr := rec.NodeID
-			uploadedNodeID, uploadErr := carbonioAuth.UploadFile(authToken, parentNodeID, filePath, true, false, &nodeIDStr)
+			uploadedNodeID, uploadErr := carbonioAuth.UploadFile(session.Token(), parentNodeID, filePath, true, false, &nodeIDStr)
 			if uploadErr != nil {
 				log.Error().Err(uploadErr).Str("path", rec.LocalPath).Msg("Uploading new version failed")
 				continue
@@ -1076,12 +1076,12 @@ func LiveCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbon
 // is forwarded to LiveCacheSync verbatim - see its doc comment. A non-nil
 // error means the caller should abort, the message has already been
 // printed.
-func FullCacheSync(endpoint, authToken, localFolder string, carbonioAuth *carbonio.HTTPAuthenticator, deleteRemoteNode string) (SyncSummary, error) {
-	if err := UpdateCacheSync(endpoint, authToken, localFolder); err != nil {
+func FullCacheSync(endpoint string, session *carbonio.Session, localFolder string, carbonioAuth *carbonio.HTTPAuthenticator, deleteRemoteNode string) (SyncSummary, error) {
+	if err := UpdateCacheSync(endpoint, session, localFolder); err != nil {
 		return SyncSummary{}, err
 	}
 
-	summary, err := LiveCacheSync(endpoint, authToken, localFolder, carbonioAuth, deleteRemoteNode)
+	summary, err := LiveCacheSync(endpoint, session, localFolder, carbonioAuth, deleteRemoteNode)
 	if err != nil {
 		return SyncSummary{}, err
 	}

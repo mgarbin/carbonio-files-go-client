@@ -86,7 +86,7 @@ func TestUpdateCacheSync_DoesNotFlagLocalDeletedWhenWalkSkipsAnExistingPath(t *t
 		t.Fatalf("InsertFileSync: %v", err)
 	}
 
-	if err := UpdateCacheSync(endpoint, "token", localFolder); err != nil {
+	if err := UpdateCacheSync(endpoint, newTestSession("token"), localFolder); err != nil {
 		t.Fatalf("UpdateCacheSync: %v", err)
 	}
 
@@ -122,7 +122,7 @@ func TestUpdateCacheSync_StillFlagsLocalDeletedWhenPathIsGenuinelyGone(t *testin
 		t.Fatalf("InsertFileSync: %v", err)
 	}
 
-	if err := UpdateCacheSync(endpoint, "token", localFolder); err != nil {
+	if err := UpdateCacheSync(endpoint, newTestSession("token"), localFolder); err != nil {
 		t.Fatalf("UpdateCacheSync: %v", err)
 	}
 

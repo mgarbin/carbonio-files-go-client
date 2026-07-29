@@ -65,12 +65,18 @@ type App struct {
 	// authenticates it (Wails v2 has no cookie-manager API).
 	docsProxy *carbonio.DocsProxy
 
-	// sessionMu guards session: the background sync goroutine reads it
-	// concurrently with login/logout requests mutating it. Access only via
-	// currentSession/setSession.
+	// sessionMu guards session/authSession: the background sync goroutine
+	// reads them concurrently with login/logout requests mutating them.
+	// Access only via currentSession/currentAuthSession/setSession.
 	sessionMu sync.RWMutex
 	// session holds the currently authenticated user, if any.
 	session Session
+	// authSession is the *carbonio.Session backing session: the single
+	// source of truth for the current ZM_AUTH_TOKEN and the only thing
+	// capable of refreshing it (via Reauthenticate) when a GraphQL/REST
+	// call reports the token expired. Set alongside session by
+	// setSession, nil exactly when session.LoggedIn is false.
+	authSession *carbonio.Session
 
 	// logCloser closes the log file opened by applyLoggingConfig, if any.
 	logCloser io.Closer
@@ -549,7 +555,7 @@ func (a *App) UpdateCacheSync() error {
 	if !a.tryBeginSync() {
 		return errors.New("a sync is already in progress")
 	}
-	err := actions.UpdateCacheSync(session.Endpoint, session.Token, folder.Path)
+	err := actions.UpdateCacheSync(session.Endpoint, a.currentAuthSession(), folder.Path)
 	a.endSync()
 	if err != nil {
 		return err
@@ -582,7 +588,7 @@ func (a *App) StartFullSync() error {
 		return errors.New("a sync is already in progress")
 	}
 	defer a.endSync()
-	summary, err := actions.FullCacheSync(session.Endpoint, session.Token, folder.Path, a.auth, a.GetDeleteRemoteNode())
+	summary, err := actions.FullCacheSync(session.Endpoint, a.currentAuthSession(), folder.Path, a.auth, a.GetDeleteRemoteNode())
 	if err != nil {
 		return err
 	}
@@ -983,9 +989,9 @@ func (a *App) runBackgroundSyncCycle() {
 	}
 	defer a.endSync()
 
-	endpoint, token := session.Endpoint, session.Token
+	endpoint, authSession := session.Endpoint, a.currentAuthSession()
 
-	if err := actions.UpdateCacheSync(endpoint, token, folder.Path); err != nil {
+	if err := actions.UpdateCacheSync(endpoint, authSession, folder.Path); err != nil {
 		log.Error().Err(err).Msg("Background sync: updateCacheSync failed")
 		return
 	}
@@ -1001,7 +1007,7 @@ func (a *App) runBackgroundSyncCycle() {
 	}
 
 	log.Info().Int("pending", pending).Msg("Background sync: changes detected, running liveCacheSync")
-	summary, err := actions.LiveCacheSync(endpoint, token, folder.Path, a.auth, a.GetDeleteRemoteNode())
+	summary, err := actions.LiveCacheSync(endpoint, authSession, folder.Path, a.auth, a.GetDeleteRemoteNode())
 	if err != nil {
 		log.Error().Err(err).Msg("Background sync: liveCacheSync failed")
 		return
@@ -1382,7 +1388,7 @@ func (a *App) autoLogin(cfg *sqlitecache.ConfigRecord) LoginResult {
 		return result
 	}
 
-	a.setSession(Session{LoggedIn: true, Endpoint: cfg.Endpoint, Username: cfg.Username, Token: token})
+	a.setSession(Session{LoggedIn: true, Endpoint: cfg.Endpoint, Username: cfg.Username, Token: token}, session)
 	a.maybeStartBackgroundSync()
 	return LoginResult{Success: true, Endpoint: cfg.Endpoint, Username: cfg.Username, NeedsSyncSetup: cfg.FilesLocalFolder == ""}
 }
@@ -1456,7 +1462,7 @@ func (a *App) login(endpoint, username, password string) LoginResult {
 		return result
 	}
 
-	a.setSession(Session{LoggedIn: true, Endpoint: endpoint, Username: username, Token: token})
+	a.setSession(Session{LoggedIn: true, Endpoint: endpoint, Username: username, Token: token}, session)
 
 	result := LoginResult{Success: true, Endpoint: endpoint, Username: username}
 	if a.db != nil {
@@ -1475,11 +1481,22 @@ func (a *App) currentSession() Session {
 	return a.session
 }
 
-// setSession thread-safely replaces the current session.
-func (a *App) setSession(s Session) {
+// currentAuthSession returns the *carbonio.Session backing the current
+// session - the single source of truth for the current ZM_AUTH_TOKEN and
+// the only thing capable of refreshing it - or nil if nobody is logged in.
+func (a *App) currentAuthSession() *carbonio.Session {
+	a.sessionMu.RLock()
+	defer a.sessionMu.RUnlock()
+	return a.authSession
+}
+
+// setSession thread-safely replaces the current session and its backing
+// *carbonio.Session together - they must never drift out of sync.
+func (a *App) setSession(s Session, authSession *carbonio.Session) {
 	a.sessionMu.Lock()
 	defer a.sessionMu.Unlock()
 	a.session = s
+	a.authSession = authSession
 }
 
 // GetSession returns the currently authenticated user, or a zero Session if
@@ -1492,7 +1509,7 @@ func (a *App) GetSession() Session {
 // the next launch shows the login screen again.
 func (a *App) Logout() error {
 	a.stopBackgroundSync()
-	a.setSession(Session{})
+	a.setSession(Session{}, nil)
 	if a.db == nil {
 		return nil
 	}

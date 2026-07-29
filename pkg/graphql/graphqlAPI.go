@@ -3,10 +3,12 @@ package graphql
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
+	genqlient "github.com/Khan/genqlient/graphql"
 	"github.com/rs/zerolog/log"
 )
 
@@ -14,9 +16,22 @@ type API interface {
 	GetAllNode(nodeID string)
 }
 
+// GraphQLAuthenticator issues GraphQL requests against Endpoint,
+// authenticating with AuthToken (the ZM_AUTH_TOKEN cookie). ZM_AUTH_TOKEN
+// normally expires after a fixed window (commonly 8 hours, but server
+// configurable) - once it does, the server rejects every request with a
+// bare HTTP 401 ("Unable to find requested user"). If TokenRefresher is
+// set, every method here reacts to that 401 by calling it to obtain a
+// fresh token, updating AuthToken, and retrying the failed request exactly
+// once - so a long-lived caller (e.g. the desktop GUI's background sync
+// loop) survives token expiry without user intervention. TokenRefresher is
+// typically *carbonio.Session's Reauthenticate method. A nil TokenRefresher
+// (the zero value) disables this: a 401 is simply returned as an error,
+// matching the pre-existing behavior.
 type GraphQLAuthenticator struct {
-	Endpoint  string
-	AuthToken string
+	Endpoint       string
+	AuthToken      string
+	TokenRefresher func() (string, error)
 }
 
 // customTransport adds the Cookie header to every request. TLS/dialer
@@ -48,24 +63,57 @@ func newAuthenticatedClient(authToken string) *http.Client {
 	}
 }
 
+// isUnauthorized reports whether err is the genqlient HTTPError carbonio-auth
+// returns for a rejected ZM_AUTH_TOKEN: AuthorizedApiHandler maps every
+// reason a token stops being usable (expired, deregistered, malformed) to a
+// bare HTTP 401, so a 401 here is the correct, and only, signal to
+// re-authenticate.
+func isUnauthorized(err error) bool {
+	var httpErr *genqlient.HTTPError
+	return errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusUnauthorized
+}
+
+// executeWithReauth runs op, which must perform exactly one GraphQL request
+// using the *http.Client it is given (built from a.AuthToken). If op fails
+// with isUnauthorized and a.TokenRefresher is set, executeWithReauth calls
+// TokenRefresher to obtain a fresh ZM_AUTH_TOKEN, stores it on a.AuthToken,
+// and retries op exactly once with a client built from the new token. Any
+// other error, or a refresh failure, is returned as-is from the failing
+// attempt - op is never retried more than once.
+func (a *GraphQLAuthenticator) executeWithReauth(op func(httpClient *http.Client) error) error {
+	err := op(newAuthenticatedClient(a.AuthToken))
+	if err == nil || a.TokenRefresher == nil || !isUnauthorized(err) {
+		return err
+	}
+
+	log.Warn().Msg("GraphQL request unauthorized, ZM_AUTH_TOKEN likely expired - requesting a new one")
+	newToken, refreshErr := a.TokenRefresher()
+	if refreshErr != nil {
+		log.Error().Err(refreshErr).Msg("Failed to refresh ZM_AUTH_TOKEN after 401")
+		return err
+	}
+	a.AuthToken = newToken
+	return op(newAuthenticatedClient(a.AuthToken))
+}
+
 func (a *GraphQLAuthenticator) GetAllNode(nodeID string, sort string, pageToken *string, sharesLimit *int) ([]*Node, error) {
-	// Optionally, set up an authenticated HTTP client
-	httpClient := newAuthenticatedClient(a.AuthToken)
-
-	client := NewClient("https://"+a.Endpoint+"/services/files/graphql", httpClient)
-
 	//hard coded for now
 	childrenLimit := 25
 
-	// Execute the query
-	resp, err := client.GetChildren(
-		context.Background(),
-		nodeID,
-		childrenLimit,
-		pageToken,
-		sort,
-		sharesLimit,
-	)
+	var resp *GetChildrenResponse
+	err := a.executeWithReauth(func(httpClient *http.Client) error {
+		client := NewClient("https://"+a.Endpoint+"/services/files/graphql", httpClient)
+		var queryErr error
+		resp, queryErr = client.GetChildren(
+			context.Background(),
+			nodeID,
+			childrenLimit,
+			pageToken,
+			sort,
+			sharesLimit,
+		)
+		return queryErr
+	})
 
 	if err != nil {
 		log.Error().Err(err).Msg("GraphQL query failed")
@@ -96,21 +144,21 @@ func (a *GraphQLAuthenticator) GetAllNode(nodeID string, sort string, pageToken 
 }
 
 func (a *GraphQLAuthenticator) CreateFolder(parentId string, folderName string) (*Folder, error) {
-	// Optionally, set up an authenticated HTTP client
-	httpClient := newAuthenticatedClient(a.AuthToken)
-
-	client := NewClient("https://"+a.Endpoint+"/services/files/graphql", httpClient)
-
 	//hard coded for now
 	sharesLimit := 6
 
-	// Execute the query
-	resp, err := client.CreateFolder(
-		context.Background(),
-		parentId,
-		folderName,
-		&sharesLimit,
-	)
+	var resp *CreateFolderResponse
+	err := a.executeWithReauth(func(httpClient *http.Client) error {
+		client := NewClient("https://"+a.Endpoint+"/services/files/graphql", httpClient)
+		var queryErr error
+		resp, queryErr = client.CreateFolder(
+			context.Background(),
+			parentId,
+			folderName,
+			&sharesLimit,
+		)
+		return queryErr
+	})
 
 	if err != nil {
 		log.Error().Err(err).Msg("GraphQL query failed")
@@ -126,17 +174,17 @@ func (a *GraphQLAuthenticator) CreateFolder(parentId string, folderName string) 
 }
 
 func (a *GraphQLAuthenticator) MoveNodes(nodeIds []string, targetParentId string) ([]string, error) {
-	// Optionally, set up an authenticated HTTP client
-	httpClient := newAuthenticatedClient(a.AuthToken)
-
-	client := NewClient("https://"+a.Endpoint+"/services/files/graphql", httpClient)
-
-	// Execute the query
-	resp, err := client.MoveNodes(
-		context.Background(),
-		nodeIds,
-		targetParentId,
-	)
+	var resp *MoveNodesResponse
+	err := a.executeWithReauth(func(httpClient *http.Client) error {
+		client := NewClient("https://"+a.Endpoint+"/services/files/graphql", httpClient)
+		var queryErr error
+		resp, queryErr = client.MoveNodes(
+			context.Background(),
+			nodeIds,
+			targetParentId,
+		)
+		return queryErr
+	})
 
 	if err != nil {
 		log.Error().Err(err).Msg("GraphQL query failed")
@@ -152,16 +200,16 @@ func (a *GraphQLAuthenticator) MoveNodes(nodeIds []string, targetParentId string
 }
 
 func (a *GraphQLAuthenticator) TrashNodes(nodeIds []string) ([]string, error) {
-	// Optionally, set up an authenticated HTTP client
-	httpClient := newAuthenticatedClient(a.AuthToken)
-
-	client := NewClient("https://"+a.Endpoint+"/services/files/graphql", httpClient)
-
-	// Execute the query
-	resp, err := client.TrashNodes(
-		context.Background(),
-		nodeIds,
-	)
+	var resp *TrashNodesResponse
+	err := a.executeWithReauth(func(httpClient *http.Client) error {
+		client := NewClient("https://"+a.Endpoint+"/services/files/graphql", httpClient)
+		var queryErr error
+		resp, queryErr = client.TrashNodes(
+			context.Background(),
+			nodeIds,
+		)
+		return queryErr
+	})
 
 	if err != nil {
 		log.Error().Err(err).Msg("GraphQL query failed")
@@ -177,16 +225,16 @@ func (a *GraphQLAuthenticator) TrashNodes(nodeIds []string) ([]string, error) {
 }
 
 func (a *GraphQLAuthenticator) DeleteNodes(nodeIds []string) ([]string, error) {
-	// Optionally, set up an authenticated HTTP client
-	httpClient := newAuthenticatedClient(a.AuthToken)
-
-	client := NewClient("https://"+a.Endpoint+"/services/files/graphql", httpClient)
-
-	// Execute the query
-	resp, err := client.DeleteNodes(
-		context.Background(),
-		nodeIds,
-	)
+	var resp *DeleteNodesResponse
+	err := a.executeWithReauth(func(httpClient *http.Client) error {
+		client := NewClient("https://"+a.Endpoint+"/services/files/graphql", httpClient)
+		var queryErr error
+		resp, queryErr = client.DeleteNodes(
+			context.Background(),
+			nodeIds,
+		)
+		return queryErr
+	})
 
 	if err != nil {
 		log.Error().Err(err).Msg("GraphQL query failed")
