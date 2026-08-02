@@ -12,18 +12,50 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// RecursiveListNodeItems walks the remote node tree starting at id and returns
-// a flat map keyed by relative path (folderPath-prefixed) to localfs.ItemInfo,
-// mirroring the shape produced by localfs.ReadFolderRecursive so the two can
-// be compared directly.
-func RecursiveListNodeItems(graphqlAuthenticator *graphql.GraphQLAuthenticator, id string, folderPath string) (map[string]localfs.ItemInfo, error) {
+// RecursiveListNodeItems walks the remote node tree starting at id and
+// returns a flat map keyed by relative path (folderPath-prefixed) to
+// localfs.ItemInfo, mirroring the shape produced by
+// localfs.ReadFolderRecursive so the two can be compared directly.
+//
+// It is best-effort below the root: graphql.GraphQLAuthenticator.GetAllNode
+// already retries transient errors internally, but if a subtree's listing
+// still fails afterwards, only that subtree is skipped - its own entry
+// (name, id, permissions - already known from its parent's successful
+// response) is kept, only its descendants are missing - instead of
+// discarding every already-fetched sibling folder. Its path is appended to
+// the returned failedPaths. Only a failure fetching id itself (nothing
+// usable retrieved at all) is fatal and returns a non-nil error.
+//
+// Callers MUST treat every path under a failedPaths entry (the entry
+// itself, or anything prefixed with entry+"/") as an incomplete listing: a
+// path tracked from a previous run that falls under one must never be
+// inferred as remotely deleted just because it's absent from the returned
+// map here - it may simply not have been fetched this cycle.
+func RecursiveListNodeItems(graphqlAuthenticator *graphql.GraphQLAuthenticator, id string, folderPath string) (map[string]localfs.ItemInfo, []string, error) {
+	return recursiveListNodeItems(graphqlAuthenticator, id, folderPath, true)
+}
+
+// recursiveListNodeItems is RecursiveListNodeItems' implementation. isRoot
+// distinguishes the very first call (a GetAllNode failure there is fatal,
+// nothing usable was retrieved) from every recursive call for a discovered
+// subfolder (a failure there is merely recorded in failedPaths) -
+// folderPath alone can't tell them apart from a child folder that happens
+// to be named the same as its parent's path so far.
+func recursiveListNodeItems(graphqlAuthenticator *graphql.GraphQLAuthenticator, id string, folderPath string, isRoot bool) (map[string]localfs.ItemInfo, []string, error) {
 
 	items := make(map[string]localfs.ItemInfo)
 
 	nodes, nodesErr := graphqlAuthenticator.GetAllNode(id, "NAME_ASC", nil, nil)
 	if nodesErr != nil {
-		return nil, nodesErr
+		if isRoot {
+			return nil, nil, nodesErr
+		}
+		log.Warn().Err(nodesErr).Str("path", folderPath).
+			Msg("Fetching remote subtree failed after retries, skipping it for this cycle")
+		return items, []string{folderPath}, nil
 	}
+
+	var failedPaths []string
 
 	for _, child := range nodes {
 
@@ -44,11 +76,12 @@ func RecursiveListNodeItems(graphqlAuthenticator *graphql.GraphQLAuthenticator, 
 			} else {
 				newFolderPath = folderPath + "/" + child.Name
 			}
-			newNodeItems, err := RecursiveListNodeItems(graphqlAuthenticator, child.ID, newFolderPath)
+			newNodeItems, childFailedPaths, err := recursiveListNodeItems(graphqlAuthenticator, child.ID, newFolderPath, false)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			maps.Insert(items, maps.All(newNodeItems))
+			failedPaths = append(failedPaths, childFailedPaths...)
 			items[newFolderPath] = item
 		} else {
 			item.IsFile = true
@@ -81,7 +114,7 @@ func RecursiveListNodeItems(graphqlAuthenticator *graphql.GraphQLAuthenticator, 
 		}
 	}
 
-	return items, nil
+	return items, failedPaths, nil
 }
 
 // RecursiveListNode logs the remote node tree starting at id, one structured

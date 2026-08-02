@@ -180,10 +180,13 @@ func LiveSyncCheck(endpoint string, session *carbonio.Session, localFolder strin
 	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: session.Token(), TokenRefresher: session.Reauthenticate}
 	baseFolder := "LOCAL_ROOT"
 
-	remoteMapItems, err := utils.RecursiveListNodeItems(graphqlAuthenticator, baseFolder, "")
+	remoteMapItems, failedRemotePaths, err := utils.RecursiveListNodeItems(graphqlAuthenticator, baseFolder, "")
 	if err != nil {
 		log.Error().Err(err).Msg("Fetching remote items failed")
 		return err
+	}
+	if len(failedRemotePaths) > 0 {
+		log.Warn().Strs("paths", failedRemotePaths).Msg("Remote listing incomplete for some subtrees; diff below may under-report them")
 	}
 
 	// Diff against the same keys the download path will actually create on
@@ -265,6 +268,21 @@ func contentMatches(remoteDigest, localDigest string, remoteSize, localSize int6
 	return true
 }
 
+// underFailedPath reports whether path falls under one of failedPaths -
+// exactly, or nested inside it (a failedPath+"/" prefix). See
+// utils.RecursiveListNodeItems's doc comment: a path under a failed
+// subtree is simply missing from this cycle's remote listing, not
+// necessarily deleted, so it must never feed the remote_deleted inference
+// in updateCacheSync below.
+func underFailedPath(path string, failedPaths []string) bool {
+	for _, failedPath := range failedPaths {
+		if path == failedPath || strings.HasPrefix(path, failedPath+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // updateCacheSync is UpdateCacheSync's implementation, wrapped so every
 // return path - including the early ones below - gets its outcome recorded
 // by recordCacheSyncRun without threading that call through each one.
@@ -289,10 +307,13 @@ func updateCacheSync(endpoint string, session *carbonio.Session, localFolder str
 	// Fetch remote items from GraphQL
 	graphqlAuthenticator := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: session.Token(), TokenRefresher: session.Reauthenticate}
 	baseFolder := "LOCAL_ROOT"
-	remoteMapItems, err := utils.RecursiveListNodeItems(graphqlAuthenticator, baseFolder, "")
+	remoteMapItems, failedRemotePaths, err := utils.RecursiveListNodeItems(graphqlAuthenticator, baseFolder, "")
 	if err != nil {
 		log.Error().Err(err).Msg("Fetching remote items failed")
 		return err
+	}
+	if len(failedRemotePaths) > 0 {
+		log.Warn().Strs("paths", failedRemotePaths).Msg("Remote listing incomplete for some subtrees; skipping remote-deletion detection under them this cycle")
 	}
 	log.Info().Int("count", len(remoteMapItems)).Msg("Found remote items")
 
@@ -348,7 +369,7 @@ func updateCacheSync(endpoint string, session *carbonio.Session, localFolder str
 
 			if rec.RemotePath != "" {
 				trackedPaths[rec.RemotePath] = struct{}{}
-				if rec.RemoteDeleted == 0 {
+				if rec.RemoteDeleted == 0 && !underFailedPath(rec.RemotePath, failedRemotePaths) {
 					if _, exists := remoteMapItems[rec.RemotePath]; !exists {
 						updateFields["remote_deleted"] = 1
 						log.Info().Str("path", rec.RemotePath).Msg("Remote file deleted")

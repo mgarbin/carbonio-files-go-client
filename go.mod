@@ -8,6 +8,7 @@ require (
 	github.com/gen2brain/beeep v0.11.2
 	github.com/mgarbin/systray v0.0.0-20260725124012-fe03fa4e18b8
 	github.com/rs/zerolog v1.35.1
+	github.com/vektah/gqlparser/v2 v2.5.19
 	github.com/wailsapp/wails/v2 v2.13.0
 	golang.org/x/text v0.37.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -47,7 +48,6 @@ require (
 	github.com/tkrajina/go-reflector v0.5.8 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
-	github.com/vektah/gqlparser/v2 v2.5.19 // indirect
 	github.com/wailsapp/go-webview2 v1.0.22 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
 	golang.org/x/crypto v0.51.0 // indirect

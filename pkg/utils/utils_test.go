@@ -199,9 +199,12 @@ func TestRecursiveListNodeItems_BuildsFlatPathMap(t *testing.T) {
 	})
 	auth := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: "tok-123"}
 
-	got, err := RecursiveListNodeItems(auth, "root-id", "")
+	got, failedPaths, err := RecursiveListNodeItems(auth, "root-id", "")
 	if err != nil {
 		t.Fatalf("RecursiveListNodeItems() error = %v, want nil", err)
+	}
+	if len(failedPaths) != 0 {
+		t.Fatalf("RecursiveListNodeItems() failedPaths = %v, want none", failedPaths)
 	}
 
 	want := map[string]localfs.ItemInfo{
@@ -250,11 +253,89 @@ func TestRecursiveListNodeItems_PropagatesGetAllNodeError(t *testing.T) {
 	endpoint := strings.TrimPrefix(srv.URL, "http://")
 	auth := &graphql.GraphQLAuthenticator{Endpoint: endpoint, AuthToken: "tok-123"}
 
-	items, err := RecursiveListNodeItems(auth, "root-id", "")
+	items, failedPaths, err := RecursiveListNodeItems(auth, "root-id", "")
 	if err == nil {
 		t.Fatalf("RecursiveListNodeItems() error = nil, want non-nil (TLS handshake against a non-TLS endpoint must fail)")
 	}
 	if items != nil {
 		t.Fatalf("RecursiveListNodeItems() items = %+v, want nil", items)
+	}
+	if failedPaths != nil {
+		t.Fatalf("RecursiveListNodeItems() failedPaths = %+v, want nil", failedPaths)
+	}
+}
+
+// TestRecursiveListNodeItems_SkipsFailedSubtreeButKeepsSiblings covers the
+// partial-failure containment fix: when one subfolder's getChildren calls
+// keep failing (GetAllNode's own transient retries exhausted), that
+// subtree alone is skipped - its own folder entry is still recorded, and
+// its path lands in failedPaths - while every sibling folder's
+// already-fetched items are kept, instead of the whole walk being
+// discarded.
+func TestRecursiveListNodeItems_SkipsFailedSubtreeButKeepsSiblings(t *testing.T) {
+	root := &graphql.Node{
+		ID:   "root-id",
+		Name: "Root",
+		Type: "FOLDER",
+		Children: &graphql.Children{
+			Nodes: []*graphql.Node{
+				{ID: "good-id", Name: "good", Type: "FOLDER"},
+				{ID: "bad-id", Name: "bad", Type: "FOLDER"},
+			},
+		},
+	}
+	good := &graphql.Node{
+		ID:   "good-id",
+		Name: "good",
+		Type: "FOLDER",
+		Children: &graphql.Children{
+			Nodes: []*graphql.Node{
+				{ID: "file-1", Name: "ok", Type: "FILE", Extension: strPtr("txt")},
+			},
+		},
+	}
+
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		nodeID, _ := body.Variables["node_id"].(string)
+		if nodeID == "bad-id" {
+			// Every attempt fails, including GetAllNode's own transient
+			// retries - simulates a subtree the server keeps erroring on.
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		var node *graphql.Node
+		switch nodeID {
+		case "root-id":
+			node = root
+		case "good-id":
+			node = good
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"getNode": node},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	auth := &graphql.GraphQLAuthenticator{Endpoint: strings.TrimPrefix(srv.URL, "https://"), AuthToken: "tok-123"}
+
+	got, failedPaths, err := RecursiveListNodeItems(auth, "root-id", "")
+	if err != nil {
+		t.Fatalf("RecursiveListNodeItems() error = %v, want nil (only a root-level fetch failure is fatal)", err)
+	}
+	if want := []string{"bad"}; len(failedPaths) != 1 || failedPaths[0] != want[0] {
+		t.Fatalf("RecursiveListNodeItems() failedPaths = %v, want %v", failedPaths, want)
+	}
+	for _, wantPath := range []string{"good", "good/ok.txt", "bad"} {
+		if _, ok := got[wantPath]; !ok {
+			t.Fatalf("RecursiveListNodeItems() missing key %q, got %+v", wantPath, got)
+		}
 	}
 }

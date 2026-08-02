@@ -10,6 +10,7 @@ import (
 
 	genqlient "github.com/Khan/genqlient/graphql"
 	"github.com/rs/zerolog/log"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
 type API interface {
@@ -96,23 +97,78 @@ func (a *GraphQLAuthenticator) executeWithReauth(op func(httpClient *http.Client
 	return op(newAuthenticatedClient(a.AuthToken))
 }
 
+// maxTransientAttempts and transientBackoffBase bound withTransientRetry: up
+// to 3 attempts total, sleeping 150ms then 300ms between them (~450ms worst
+// case) before giving up on a run of transient failures.
+const (
+	maxTransientAttempts = 3
+	transientBackoffBase = 150 * time.Millisecond
+)
+
+// isTransient reports whether err is worth retrying: a network-level
+// failure (dial/TLS/timeout/connection reset - MakeRequest returns these
+// straight from http.Client.Do, unwrapped, see genqlient's client.go) or a
+// 5xx/429 HTTPError. A 401 never reaches here as a final error - it's
+// already fully handled by executeWithReauth before returning. Any other
+// HTTPError status (4xx) or a well-formed response carrying GraphQL
+// execution errors (gqlerror.List, e.g. a bad query or a permission
+// error) is a permanent problem: retrying the identical request would
+// just reproduce it.
+func isTransient(err error) bool {
+	var httpErr *genqlient.HTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.StatusCode >= http.StatusInternalServerError || httpErr.StatusCode == http.StatusTooManyRequests
+	}
+	var gqlErrs gqlerror.List
+	if errors.As(err, &gqlErrs) {
+		return false
+	}
+	return true
+}
+
+// withTransientRetry runs fn - a single GraphQL round trip, typically
+// wrapping executeWithReauth - up to maxTransientAttempts times with a
+// doubling backoff, but only while isTransient keeps returning true.
+// GetAllNode is the only caller: it is read-only, so retrying it is always
+// safe. Mutations (CreateFolder, MoveNodes, TrashNodes, DeleteNodes) are
+// deliberately NOT wrapped in this - see findExistingRemoteChild's doc
+// comment in pkg/actions/actions.go: a lost response after a mutation that
+// actually succeeded server-side would turn a blind retry into a
+// duplicate/second action.
+func withTransientRetry(fn func() error) error {
+	var err error
+	for attempt := range maxTransientAttempts {
+		if err = fn(); err == nil || !isTransient(err) {
+			return err
+		}
+		if attempt < maxTransientAttempts-1 {
+			backoff := transientBackoffBase << attempt
+			log.Warn().Err(err).Int("attempt", attempt+1).Dur("backoff", backoff).Msg("Transient GraphQL error, retrying")
+			time.Sleep(backoff)
+		}
+	}
+	return err
+}
+
 func (a *GraphQLAuthenticator) GetAllNode(nodeID string, sort string, pageToken *string, sharesLimit *int) ([]*Node, error) {
 	//hard coded for now
 	childrenLimit := 25
 
 	var resp *GetChildrenResponse
-	err := a.executeWithReauth(func(httpClient *http.Client) error {
-		client := NewClient("https://"+a.Endpoint+"/services/files/graphql", httpClient)
-		var queryErr error
-		resp, queryErr = client.GetChildren(
-			context.Background(),
-			nodeID,
-			childrenLimit,
-			pageToken,
-			sort,
-			sharesLimit,
-		)
-		return queryErr
+	err := withTransientRetry(func() error {
+		return a.executeWithReauth(func(httpClient *http.Client) error {
+			client := NewClient("https://"+a.Endpoint+"/services/files/graphql", httpClient)
+			var queryErr error
+			resp, queryErr = client.GetChildren(
+				context.Background(),
+				nodeID,
+				childrenLimit,
+				pageToken,
+				sort,
+				sharesLimit,
+			)
+			return queryErr
+		})
 	})
 
 	if err != nil {
