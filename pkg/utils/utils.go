@@ -53,10 +53,18 @@ func RecursiveListNodeItems(graphqlAuthenticator *graphql.GraphQLAuthenticator, 
 		} else {
 			item.IsFile = true
 			item.NodeId = child.ID
-			item.Digest = *child.Digest
-			item.Size = *child.Size
-			item.ModifyTimestamp = *child.UpdatedAt
-			item.FileVersion = *child.Version
+			if child.Digest != nil {
+				item.Digest = *child.Digest
+			}
+			if child.Size != nil {
+				item.Size = *child.Size
+			}
+			if child.UpdatedAt != nil {
+				item.ModifyTimestamp = *child.UpdatedAt
+			}
+			if child.Version != nil {
+				item.FileVersion = *child.Version
+			}
 			if child.MimeType != nil {
 				item.MimeType = *child.MimeType
 			}

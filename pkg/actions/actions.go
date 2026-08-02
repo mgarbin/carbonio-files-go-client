@@ -246,6 +246,25 @@ func recordCacheSyncRun(runErr error) {
 	}
 }
 
+// contentMatches reports whether a remote/local pair represent identical
+// content: sizes must match, and when both sides carry a digest it must
+// match too. A digest missing on either side (e.g. a remote object the
+// server never hashed - typically a 0-byte file, or a local file above
+// localfs.maxDigestSize where hashing is skipped) falls back to a
+// size-only comparison instead of forcing a spurious mismatch just
+// because one side's digest is empty while the other computed a real
+// hash (an empty file's own digest is not the empty string - it's the
+// hash of zero bytes).
+func contentMatches(remoteDigest, localDigest string, remoteSize, localSize int64) bool {
+	if remoteSize != localSize {
+		return false
+	}
+	if remoteDigest != "" && localDigest != "" {
+		return remoteDigest == localDigest
+	}
+	return true
+}
+
 // updateCacheSync is UpdateCacheSync's implementation, wrapped so every
 // return path - including the early ones below - gets its outcome recorded
 // by recordCacheSyncRun without threading that call through each one.
@@ -400,7 +419,7 @@ func updateCacheSync(endpoint string, session *carbonio.Session, localFolder str
 				if v, ok := updateFields["local_size"]; ok {
 					finalLocalSize = v.(int64)
 				}
-				if finalRemoteDigest == finalLocalDigest && finalRemoteSize == finalLocalSize {
+				if contentMatches(finalRemoteDigest, finalLocalDigest, finalRemoteSize, finalLocalSize) {
 					updateFields["sync_status"] = "synced"
 				} else {
 					updateFields["sync_status"] = "out_of_sync"
@@ -487,7 +506,7 @@ func updateCacheSync(endpoint string, session *carbonio.Session, localFolder str
 		// Determine sync status based on presence and content comparison
 		syncStatus := "unknown"
 		if hasLocal && hasRemote {
-			if localDigest == remoteDigest && localSize == remoteSize {
+			if contentMatches(remoteDigest, localDigest, remoteSize, localSize) {
 				syncStatus = "synced"
 			} else {
 				syncStatus = "out_of_sync"
@@ -858,12 +877,9 @@ func LiveCacheSync(endpoint string, session *carbonio.Session, localFolder strin
 			}
 		}
 
-		// Verify that content actually differs before acting.
-		// Use digest comparison when both sides have a digest, otherwise fall back to size.
-		contentDiffers := rec.RemoteSize != rec.LocalSize
-		if rec.RemoteDigest != "" && rec.LocalDigest != "" {
-			contentDiffers = rec.RemoteDigest != rec.LocalDigest
-		}
+		// Verify that content actually differs before acting - see
+		// contentMatches for the digest-fallback rationale.
+		contentDiffers := !contentMatches(rec.RemoteDigest, rec.LocalDigest, rec.RemoteSize, rec.LocalSize)
 		if !contentDiffers {
 			// Content is identical despite the out_of_sync status; just update the flag.
 			if updateErr := cacheDb.UpdateFileSync("id", rec.ID, map[string]interface{}{
